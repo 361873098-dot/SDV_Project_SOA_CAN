@@ -28,6 +28,7 @@ extern "C" {
 #include "FlexCAN_Ip.h"
 #include "Mcal.h"
 #include "TJA1145A_Spi_Baremetal.h"
+#include "CANdbc_file.h"
 
 
 
@@ -44,6 +45,10 @@ volatile uint32 g_canTxCount2 = 0;
 /** RX counters (for debugging) */
 volatile uint32 g_canRxCount = 0;
 volatile uint32 g_canRxCount2 = 0;
+
+/** DBC-defined message struct instances */
+Standard_100_Tx_t g_tx_Standard_100_Tx = {0}; /**< TX 0x100 — set fields before AINFC_Can_Cyclic_10ms */
+Standard_100_Rx_t g_rx_Standard_100_Rx = {0}; /**< RX 0x200 — read fields after AINFC_Can_Cyclic_10ms */
 
 
 
@@ -240,26 +245,39 @@ unsigned char AINFC_Can_RxMsgL(unsigned char Bus_ID, unsigned char Mbx,
  * Handles 2 TX and 2 RX message cyclic processing.
  */
 void AINFC_Can_Cyclic_10ms(void) {
+  unsigned char rxStatus;
+
   /* ====================================================================
    * RX Processing - poll both RX MBs
    * ==================================================================== */
 
-  /* RX MB0 (ID=0x200) */
-  (void)AINFC_Can_RxMsgL(0U, AINFC_RX_MB0, g_RxData0);
+  /* RX MB0 (ID=0x200, DBC: Standard_100_Rx) */
+  rxStatus = AINFC_Can_RxMsgL(0U, AINFC_RX_MB0, g_RxData0);
+  if (rxStatus == AINFC_CAN_OK) {
+    /* Unpack raw bytes → DBC struct */
+    Standard_100_Rx_unpack(&g_rx_Standard_100_Rx, g_RxData0, STANDARD_100_RX_DLC);
+    /* Application can now read:
+     *   g_rx_Standard_100_Rx.Test_ID_0x200
+     */
+  }
 
-  /* RX MB1 (ID=0x201) */
+  /* RX MB1 (ID=0x201) — no DBC mapping */
   (void)AINFC_Can_RxMsgL(0U, AINFC_RX_MB1, g_RxData1);
 
   /* ====================================================================
    * TX Processing - send on both TX MBs
    * ==================================================================== */
 
-  /* TX MB0 (ID=0x100): update data with counter */
-  g_txData0[0] = (uint8)(g_canTxCount & 0xFFU);
-  g_txData0[1] = (uint8)((g_canTxCount >> 8) & 0xFFU);
+  /* TX MB0 (ID=0x100, DBC: Standard_100_Tx)
+   * Application layer sets physical values in g_tx_Standard_100_Tx
+   * before this function is called, e.g.:
+   *   g_tx_Standard_100_Tx.Vehicle_Speed = 120.5f;
+   *   g_tx_Standard_100_Tx.KL15_Status   = 1u;
+   */
+  Standard_100_Tx_pack(g_txData0, &g_tx_Standard_100_Tx, STANDARD_100_TX_DLC);
   (void)AINFC_Can_TxMsg(0U, AINFC_TX_MB0, g_txData0);
 
-  /* TX MB1 (ID=0x101): update data with counter */
+  /* TX MB1 (ID=0x101) — no DBC mapping */
   g_txData1[0] = (uint8)(g_canTxCount2 & 0xFFU);
   g_txData1[1] = (uint8)((g_canTxCount2 >> 8) & 0xFFU);
   (void)AINFC_Can_TxMsg(0U, AINFC_TX_MB1, g_txData1);

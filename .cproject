@@ -39,12 +39,14 @@
 								<option id="com.nxp.s32ds.cle.arm.mbs.arm32.bare.tool.c.compiler.option.target.mcpu.921144291" name="Arm family" superClass="com.nxp.s32ds.cle.arm.mbs.arm32.bare.tool.c.compiler.option.target.mcpu" useByScannerDiscovery="true" value="com.nxp.s32ds.cle.arm.mbs.arm32.bare.tool.c.compiler.option.target.mcpu.cortex-m7" valueType="enumerated"/>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="gnu.c.compiler.option.include.paths.1483912312" name="Include paths (-I)" superClass="gnu.c.compiler.option.include.paths" useByScannerDiscovery="false" valueType="includePath">
 									<listOptionValue builtIn="false" value="../RTD/include"/>
+									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/Can_tools_generated}&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/SWC/DiagMgmt}&quot;"/>
 									<listOptionValue builtIn="false" value="../IPCF/src/common"/>
 									<listOptionValue builtIn="false" value="../IPCF/src/hw"/>
 									<listOptionValue builtIn="false" value="../IPCF/src/os"/>
-									<listOptionValue builtIn="false" value="../IPCF/src/hw/s32g3xx"/>
 									<listOptionValue builtIn="false" value="../FreeRTOS/Source/portable/GCC/ARM_CM7/r0p1"/>
 									<listOptionValue builtIn="false" value="../FreeRTOS/Source/include"/>
+									<listOptionValue builtIn="false" value="../IPCF/src/hw/s32g3xx"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/Driver/TJA145A_Spi_Ip}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/COM/FlexCAN_Ip}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/src/Ecum_Init_Main}&quot;"/>
@@ -162,9 +164,9 @@
 									<listOptionValue builtIn="false" value="../IPCF/src/common"/>
 									<listOptionValue builtIn="false" value="../IPCF/src/hw"/>
 									<listOptionValue builtIn="false" value="../IPCF/src/os"/>
-									<listOptionValue builtIn="false" value="../IPCF/src/hw/s32g3xx"/>
 									<listOptionValue builtIn="false" value="../FreeRTOS/Source/portable/GCC/ARM_CM7/r0p1"/>
 									<listOptionValue builtIn="false" value="../FreeRTOS/Source/include"/>
+									<listOptionValue builtIn="false" value="../IPCF/src/hw/s32g3xx"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/TJA145A_Spi_Ip}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/FlexCAN_Ip}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/src/Ecum_Init_Main}&quot;"/>
@@ -270,9 +272,9 @@
 									<listOptionValue builtIn="false" value="../IPCF/src/common"/>
 									<listOptionValue builtIn="false" value="../IPCF/src/hw"/>
 									<listOptionValue builtIn="false" value="../IPCF/src/os"/>
-									<listOptionValue builtIn="false" value="../IPCF/src/hw/s32g3xx"/>
 									<listOptionValue builtIn="false" value="../FreeRTOS/Source/portable/GCC/ARM_CM7/r0p1"/>
 									<listOptionValue builtIn="false" value="../FreeRTOS/Source/include"/>
+									<listOptionValue builtIn="false" value="../IPCF/src/hw/s32g3xx"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/TJA145A_Spi_Ip}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/FlexCAN_Ip}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/src/Ecum_Init_Main}&quot;"/>
@@ -390,9 +392,9 @@
 									<listOptionValue builtIn="false" value="../IPCF/src/common"/>
 									<listOptionValue builtIn="false" value="../IPCF/src/hw"/>
 									<listOptionValue builtIn="false" value="../IPCF/src/os"/>
-									<listOptionValue builtIn="false" value="../IPCF/src/hw/s32g3xx"/>
 									<listOptionValue builtIn="false" value="../FreeRTOS/Source/portable/GCC/ARM_CM7/r0p1"/>
 									<listOptionValue builtIn="false" value="../FreeRTOS/Source/include"/>
+									<listOptionValue builtIn="false" value="../IPCF/src/hw/s32g3xx"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/TJA145A_Spi_Ip}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/FlexCAN_Ip}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/src/Ecum_Init_Main}&quot;"/>
