@@ -38,7 +38,7 @@ VAL_TABLE_ Exit_Request_stauts 1 "Quit request" 0 "No Quit request" ;
 VAL_TABLE_ KST_KL_15 1 "KL15 ON" 0 "KL15 OFF" ;
 
 
-BO_ 512 Standard_100_Rx: 1 SDV_Tester
+BO_ 512 Standard_200_Rx: 1 SDV_Tester
  SG_ Test_ID_0x200 : 7|8@0+ (1,0) [0|1000] ""  SDV_M_CORE0
 
 BO_ 256 Standard_100_Tx: 8 SDV_M_CORE0
@@ -58,10 +58,10 @@ BA_DEF_DEF_  "GenMsgSendType" "Cycle";
 BA_DEF_DEF_  "GenMsgCycleTime" 100;
 BA_DEF_DEF_  "GenSigSendType" "Cycle";
 BA_DEF_DEF_  "BusType" "CAN";
-BA_ "GenMsgSendType" BO_ 512 0;
 BA_ "GenMsgCycleTime" BO_ 512 100;
-BA_ "GenMsgSendType" BO_ 256 0;
+BA_ "GenMsgSendType" BO_ 512 0;
 BA_ "GenMsgCycleTime" BO_ 256 100;
+BA_ "GenMsgSendType" BO_ 256 0;
 VAL_ 256 KL15_Status 1 "KL15 ON" 0 "KL15 OFF" ;
 SIG_VALTYPE_ 256 Vehicle_Speed : 1;
 

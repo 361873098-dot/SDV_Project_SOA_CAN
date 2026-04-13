@@ -74,9 +74,6 @@ extern volatile uint32 g_canTxCount2;
 extern volatile uint32 g_canRxCount;
 extern volatile uint32 g_canRxCount2;
 
-/** DBC-defined message struct instances (declared in FlexCAN_Ip_main.c) */
-extern Standard_100_Tx_t g_tx_Standard_100_Tx; /**< TX 0x100 - write before 10ms cycle */
-extern Standard_100_Rx_t g_rx_Standard_100_Rx; /**< RX 0x200 - read after 10ms cycle  */
 
 /*==================================================================================================
  *                                         FUNCTION PROTOTYPES

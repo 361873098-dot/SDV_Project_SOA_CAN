@@ -46,9 +46,6 @@ volatile uint32 g_canTxCount2 = 0;
 volatile uint32 g_canRxCount = 0;
 volatile uint32 g_canRxCount2 = 0;
 
-/** DBC-defined message struct instances */
-Standard_100_Tx_t g_tx_Standard_100_Tx = {0}; /**< TX 0x100 — set fields before AINFC_Can_Cyclic_10ms */
-Standard_100_Rx_t g_rx_Standard_100_Rx = {0}; /**< RX 0x200 — read fields after AINFC_Can_Cyclic_10ms */
 
 
 
@@ -251,13 +248,13 @@ void AINFC_Can_Cyclic_10ms(void) {
    * RX Processing - poll both RX MBs
    * ==================================================================== */
 
-  /* RX MB0 (ID=0x200, DBC: Standard_100_Rx) */
+  /* RX MB0 (ID=0x200, DBC: Standard_200_Rx) */
   rxStatus = AINFC_Can_RxMsgL(0U, AINFC_RX_MB0, g_RxData0);
   if (rxStatus == AINFC_CAN_OK) {
     /* Unpack raw bytes → DBC struct */
-    Standard_100_Rx_unpack(&g_rx_Standard_100_Rx, g_RxData0, STANDARD_100_RX_DLC);
+    Standard_200_Rx_unpack(&g_rx_Standard_200_Rx, g_RxData0, STANDARD_200_RX_DLC);
     /* Application can now read:
-     *   g_rx_Standard_100_Rx.Test_ID_0x200
+     *   g_rx_Standard_200_Rx.Test_ID_0x200
      */
   }
 

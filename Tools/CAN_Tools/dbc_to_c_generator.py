@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-DBC to C Code Generator for Embedded CAN Applications
-======================================================
+DBC to C Code Generator for Embedded CAN Applications (cantools-based)
+======================================================================
 
-Parses Vector DBC files and generates C header/source files with:
+Uses the `cantools` library for reliable DBC parsing and generates C
+header/source files with:
   - Message struct definitions (with signal metadata as comments)
-  - Pack functions  (struct -> CAN data bytes)
-  - Unpack functions (CAN data bytes -> struct)
-  - IEEE float / double signal support (SIG_VALTYPE_)
+  - Pack functions  (struct -> CAN data bytes)  — TX messages only
+  - Unpack functions (CAN data bytes -> struct) — RX messages only
+  - IEEE float / double signal support
   - Motorola (big-endian) and Intel (little-endian) byte order
   - Factor / offset scaling
   - Signed integer two's complement handling
@@ -19,229 +20,45 @@ Usage:
 
 Example (run from Tools/CAN_Tools):
   python dbc_to_c_generator.py SOA_DBC_File\\CANdbc_file.dbc ..\\..\\Can_tools_generated --node SDV_M_CORE0
+
+Dependencies:
+  pip install cantools
 """
 
-import re
 import os
 import sys
-import math
+import re
 import argparse
-from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Tuple
 from pathlib import Path
 from datetime import datetime
 
-
-# ===========================================================================
-#  Data model
-# ===========================================================================
-
-@dataclass
-class Signal:
-    """Represents one CAN signal inside a message."""
-    name: str
-    start_bit: int
-    length: int
-    byte_order: str          # 'big_endian' (Motorola) | 'little_endian' (Intel)
-    is_signed: bool
-    factor: float
-    offset: float
-    minimum: float
-    maximum: float
-    unit: str
-    receivers: List[str]
-    comment: str = ""
-    value_type: int = 0      # 0 = integer, 1 = IEEE float32, 2 = IEEE float64
-    value_descriptions: Dict[int, str] = field(default_factory=dict)
-
-
-@dataclass
-class Message:
-    """Represents one CAN message (BO_)."""
-    msg_id: int
-    name: str
-    dlc: int
-    sender: str
-    signals: List[Signal] = field(default_factory=list)
-    comment: str = ""
-    cycle_time: int = 0
-    send_type: str = "Cycle"
+try:
+    import cantools
+except ImportError:
+    print("ERROR: 'cantools' library is required. Install via: pip install cantools",
+          file=sys.stderr)
+    sys.exit(1)
 
 
 # ===========================================================================
-#  DBC parser
+#  Helpers
 # ===========================================================================
 
-class DbcParser:
-    """Minimal-but-correct Vector DBC parser."""
-
-    def __init__(self):
-        self.messages: Dict[int, Message] = {}
-        self.nodes: List[str] = []
-        self.version: str = ""
-        self.value_tables: Dict[str, Dict[int, str]] = {}
-
-    # ----- public ----------------------------------------------------------
-    def parse(self, filepath: str):
-        with open(filepath, "r", encoding="utf-8", errors="replace") as fh:
-            content = fh.read()
-
-        self._parse_version(content)
-        self._parse_nodes(content)
-        self._parse_value_tables(content)
-        self._parse_messages(content)
-        self._parse_signal_value_types(content)
-        self._parse_value_descriptions(content)
-        self._parse_comments(content)
-        self._parse_attributes(content)
-
-    # ----- private ---------------------------------------------------------
-    def _parse_version(self, content: str):
-        m = re.search(r'VERSION\s+"([^"]*)"', content)
-        if m:
-            self.version = m.group(1)
-
-    def _parse_nodes(self, content: str):
-        m = re.search(r"BU_\s*:\s*(.*)", content)
-        if m:
-            self.nodes = m.group(1).strip().split()
-
-    def _parse_value_tables(self, content: str):
-        pattern = re.compile(
-            r"VAL_TABLE_\s+(\w+)\s+(.*?)\s*;", re.DOTALL
-        )
-        pair_pat = re.compile(r'(\d+)\s+"([^"]*)"')
-        for m in pattern.finditer(content):
-            tbl_name = m.group(1)
-            pairs = {}
-            for pm in pair_pat.finditer(m.group(2)):
-                pairs[int(pm.group(1))] = pm.group(2)
-            self.value_tables[tbl_name] = pairs
-
-    def _parse_messages(self, content: str):
-        msg_re = re.compile(
-            r"BO_\s+(\d+)\s+(\w+)\s*:\s*(\d+)\s+(\w+)", re.MULTILINE
-        )
-        # Signal regex — handles scientific notation in min/max
-        sig_re = re.compile(
-            r"\s+SG_\s+(\w+)\s*:\s*(\d+)\|(\d+)@([01])([+-])\s+"
-            r"\(([^,]+),([^)]+)\)\s+\[([^|]+)\|([^\]]+)\]\s+"
-            r'"([^"]*)"\s+(.*)',
-            re.MULTILINE,
-        )
-
-        msg_positions = [(m.start(), m) for m in msg_re.finditer(content)]
-        for idx, (pos, mm) in enumerate(msg_positions):
-            msg_id = int(mm.group(1))
-            msg = Message(
-                msg_id=msg_id,
-                name=mm.group(2),
-                dlc=int(mm.group(3)),
-                sender=mm.group(4),
-            )
-            # Determine text region for this message's signals
-            start = mm.end()
-            end = msg_positions[idx + 1][0] if idx + 1 < len(msg_positions) else len(content)
-            block = content[start:end]
-
-            for sm in sig_re.finditer(block):
-                try:
-                    minimum = float(sm.group(8).strip())
-                except ValueError:
-                    minimum = 0.0
-                try:
-                    maximum = float(sm.group(9).strip())
-                except ValueError:
-                    maximum = 0.0
-
-                receivers = [r.strip() for r in sm.group(11).strip().split(",") if r.strip()]
-                sig = Signal(
-                    name=sm.group(1),
-                    start_bit=int(sm.group(2)),
-                    length=int(sm.group(3)),
-                    byte_order="big_endian" if sm.group(4) == "0" else "little_endian",
-                    is_signed=(sm.group(5) == "-"),
-                    factor=float(sm.group(6)),
-                    offset=float(sm.group(7)),
-                    minimum=minimum,
-                    maximum=maximum,
-                    unit=sm.group(10),
-                    receivers=receivers,
-                )
-                msg.signals.append(sig)
-
-            self.messages[msg_id] = msg
-
-    def _parse_signal_value_types(self, content: str):
-        pat = re.compile(r"SIG_VALTYPE_\s+(\d+)\s+(\w+)\s*:\s*(\d+)\s*;")
-        for m in pat.finditer(content):
-            mid = int(m.group(1))
-            sname = m.group(2)
-            vt = int(m.group(3))
-            if mid in self.messages:
-                for s in self.messages[mid].signals:
-                    if s.name == sname:
-                        s.value_type = vt
-                        break
-
-    def _parse_value_descriptions(self, content: str):
-        pat = re.compile(r"VAL_\s+(\d+)\s+(\w+)\s+(.*?)\s*;", re.DOTALL)
-        pair_pat = re.compile(r'(\d+)\s+"([^"]*)"')
-        for m in pat.finditer(content):
-            mid = int(m.group(1))
-            sname = m.group(2)
-            if mid in self.messages:
-                for s in self.messages[mid].signals:
-                    if s.name == sname:
-                        for pm in pair_pat.finditer(m.group(3)):
-                            s.value_descriptions[int(pm.group(1))] = pm.group(2)
-                        break
-
-    def _parse_comments(self, content: str):
-        # Message comments
-        pat_bo = re.compile(r'CM_\s+BO_\s+(\d+)\s+"([^"]*)"\s*;')
-        for m in pat_bo.finditer(content):
-            mid = int(m.group(1))
-            if mid in self.messages:
-                self.messages[mid].comment = m.group(2)
-        # Signal comments
-        pat_sg = re.compile(r'CM_\s+SG_\s+(\d+)\s+(\w+)\s+"([^"]*)"\s*;')
-        for m in pat_sg.finditer(content):
-            mid = int(m.group(1))
-            sname = m.group(2)
-            if mid in self.messages:
-                for s in self.messages[mid].signals:
-                    if s.name == sname:
-                        s.comment = m.group(3)
-                        break
-
-    def _parse_attributes(self, content: str):
-        # Cycle time
-        pat_ct = re.compile(r'BA_\s+"GenMsgCycleTime"\s+BO_\s+(\d+)\s+(\d+)\s*;')
-        for m in pat_ct.finditer(content):
-            mid = int(m.group(1))
-            if mid in self.messages:
-                self.messages[mid].cycle_time = int(m.group(2))
-        # Send type
-        pat_st = re.compile(r'BA_\s+"GenMsgSendType"\s+BO_\s+(\d+)\s+(\d+)\s*;')
-        for m in pat_st.finditer(content):
-            mid = int(m.group(1))
-            if mid in self.messages:
-                self.messages[mid].send_type = (
-                    "Cycle" if int(m.group(2)) == 0 else "Event"
-                )
+def upper_name(name: str) -> str:
+    """Convert CamelCase / mixed to UPPER_CASE, collapsing double underscores."""
+    s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
+    result = re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).upper()
+    result = re.sub(r"_+", "_", result)
+    return result
 
 
-# ===========================================================================
-#  C code helpers
-# ===========================================================================
-
-def c_type_for_signal(sig: Signal) -> str:
+def c_type_for_signal(sig) -> str:
     """Return the best C type for a signal's struct member."""
-    if sig.value_type == 1:
-        return "float"
-    if sig.value_type == 2:
-        return "double"
+    if sig.is_float:
+        if sig.length <= 32:
+            return "float"
+        else:
+            return "double"
     # integer
     if sig.is_signed:
         if sig.length <= 8:
@@ -264,7 +81,7 @@ def c_type_for_signal(sig: Signal) -> str:
 
 
 def raw_uint_type(bit_width: int) -> str:
-    """Return the unsigned integer type that can hold *bit_width* bits."""
+    """Return the unsigned integer type that can hold bit_width bits."""
     if bit_width <= 8:
         return "uint8_t"
     elif bit_width <= 16:
@@ -285,13 +102,16 @@ def raw_uint_suffix(bit_width: int) -> str:
         return "ull"
 
 
-def upper_name(name: str) -> str:
-    """Convert CamelCase / mixed to UPPER_CASE, collapsing double underscores."""
-    s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
-    result = re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).upper()
-    # Collapse consecutive underscores
-    result = re.sub(r"_+", "_", result)
-    return result
+def type_bits_for_length(length: int) -> int:
+    """Return the C integer type bit-width for a given signal length."""
+    if length <= 8:
+        return 8
+    elif length <= 16:
+        return 16
+    elif length <= 32:
+        return 32
+    else:
+        return 64
 
 
 # ---------------------------------------------------------------------------
@@ -300,16 +120,15 @@ def upper_name(name: str) -> str:
 
 def _motorola_byte_segments(start_bit: int, length: int):
     """
-    Yield (byte_idx, low_bit_in_byte, bits_count, raw_shift) tuples
-    from MSB to LSB for a Motorola-order signal.
+    Yield (byte_idx, low_bit_in_byte, bits_count, raw_shift, mask) tuples
+    from MSB to LSB for a Motorola-order (big-endian) signal.
 
-    raw_shift: how many bits to right-shift the raw value to get the
-    portion for this byte.
+    start_bit: MSB position in Vector DBC notation (row*8 + col, col=7 is MSB).
     """
     remaining = length
-    raw_shift = length          # decremented before yield
+    raw_shift = length
     byte_idx = start_bit // 8
-    bit_pos = start_bit % 8     # MSB position within byte
+    bit_pos = start_bit % 8
 
     while remaining > 0:
         bits_here = min(bit_pos + 1, remaining)
@@ -324,8 +143,10 @@ def _motorola_byte_segments(start_bit: int, length: int):
 
 def _intel_byte_segments(start_bit: int, length: int):
     """
-    Yield (byte_idx, low_bit_in_byte, bits_count, raw_shift) tuples
-    from LSB to MSB for an Intel-order signal.
+    Yield (byte_idx, low_bit_in_byte, bits_count, raw_shift, mask) tuples
+    from LSB to MSB for an Intel-order (little-endian) signal.
+
+    start_bit: LSB position.
     """
     remaining = length
     raw_shift = 0
@@ -343,362 +164,466 @@ def _intel_byte_segments(start_bit: int, length: int):
         bit_pos = 0
 
 
-def byte_segments(sig: Signal):
+def byte_segments(sig):
+    """Get byte segments for a signal based on its byte order."""
     if sig.byte_order == "big_endian":
-        return list(_motorola_byte_segments(sig.start_bit, sig.length))
+        return list(_motorola_byte_segments(sig.start, sig.length))
     else:
-        return list(_intel_byte_segments(sig.start_bit, sig.length))
+        return list(_intel_byte_segments(sig.start, sig.length))
 
 
 # ===========================================================================
-#  C code generator
+#  Direction helpers
 # ===========================================================================
 
-class CCodeGenerator:
-    """Generates .h / .c from parsed DBC data."""
+def is_tx(msg, node: str) -> bool:
+    """Message is TX when the given node is the sender."""
+    if node is None:
+        return True
+    return node in msg.senders
 
-    def __init__(self, parser: DbcParser, node: Optional[str] = None):
-        self.parser = parser
-        self.node = node        # target ECU node (e.g. SDV_M_CORE0)
 
-    # ----- direction helpers -----------------------------------------------
-    def is_tx(self, msg: Message) -> bool:
-        """Message is TX when this node is the sender."""
-        if self.node is None:
+def is_rx(msg, node: str) -> bool:
+    """Message is RX when the given node appears in any signal's receivers."""
+    if node is None:
+        return True
+    for sig in msg.signals:
+        if node in sig.receivers:
             return True
-        return msg.sender == self.node
+    return False
 
-    def is_rx(self, msg: Message) -> bool:
-        """Message is RX when this node appears in any signal's receivers."""
-        if self.node is None:
-            return True
+
+def direction_tag(msg, node: str) -> str:
+    """Return 'TX', 'RX', or 'TX/RX' direction tag."""
+    parts = []
+    if is_tx(msg, node):
+        parts.append("TX")
+    if is_rx(msg, node):
+        parts.append("RX")
+    return "/".join(parts) if parts else "N/A"
+
+
+# ===========================================================================
+#  C Code Generator
+# ===========================================================================
+
+def generate_header(db, basename: str, node: str) -> str:
+    """Generate the .h header file content."""
+    guard = basename.upper().replace(".", "_").replace("-", "_") + "_H"
+    lines = []
+    lines.append(f"/**")
+    lines.append(f" * @file {basename}.h")
+    lines.append(f" * @brief Auto-generated CAN message pack/unpack interface")
+    lines.append(f" *")
+    lines.append(f" * Generated from DBC by dbc_to_c_generator.py (cantools-based)")
+    lines.append(f" * Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f" *")
+    lines.append(f" * DO NOT EDIT — re-run the generator to update.")
+    lines.append(f" */")
+    lines.append(f"")
+    lines.append(f"#ifndef {guard}")
+    lines.append(f"#define {guard}")
+    lines.append(f"")
+    lines.append(f"#include <stdint.h>")
+    lines.append(f"#include <string.h>")
+    lines.append(f"")
+
+    for msg in sorted(db.messages, key=lambda m: m.frame_id):
+        msg_is_tx = is_tx(msg, node)
+        msg_is_rx = is_rx(msg, node)
+        if not (msg_is_tx or msg_is_rx):
+            continue
+
+        uname = upper_name(msg.name)
+        sender_str = ", ".join(msg.senders) if msg.senders else "Vector__XXX"
+        dtag = direction_tag(msg, node)
+
+        lines.append(f"/* " + "=" * 70 + " */")
+        lines.append(
+            f"/* Message: {msg.name}  (0x{msg.frame_id:03X}, {msg.length} bytes, "
+            f"{dtag}, sender={sender_str}) */"
+        )
+        lines.append(f"/* " + "=" * 70 + " */")
+        lines.append(f"")
+        lines.append(f"#define {uname}_ID          (0x{msg.frame_id:03X}U)")
+        lines.append(f"#define {uname}_DLC         ({msg.length}U)")
+
+        # Cycle time from DBC attribute
+        cycle_time = msg.cycle_time
+        if cycle_time is not None and cycle_time > 0:
+            lines.append(f"#define {uname}_CYCLE_MS    ({cycle_time}U)")
+        lines.append(f"")
+
+        # Value-description enums
         for sig in msg.signals:
-            if self.node in sig.receivers:
-                return True
-        return False
+            if hasattr(sig, 'choices') and sig.choices:
+                for val, desc in sorted(sig.choices.items()):
+                    enum_name = f"{uname}_{upper_name(sig.name)}_{upper_name(str(desc).replace(' ', '_'))}"
+                    lines.append(f"#define {enum_name}  ({val}U)")
+                lines.append(f"")
 
-    def direction_tag(self, msg: Message) -> str:
-        parts = []
-        if self.is_tx(msg):
-            parts.append("TX")
-        if self.is_rx(msg):
-            parts.append("RX")
-        return "/".join(parts) if parts else "N/A"
-
-    # ----- header generation -----------------------------------------------
-    def generate_header(self, basename: str) -> str:
-        guard = basename.upper().replace(".", "_").replace("-", "_") + "_H"
-        lines = []
-        lines.append(f"/**")
-        lines.append(f" * @file {basename}.h")
-        lines.append(f" * @brief Auto-generated CAN message pack/unpack interface")
-        lines.append(f" *")
-        lines.append(f" * Generated from DBC by dbc_to_c_generator.py")
-        lines.append(f" * Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        lines.append(f" *")
-        lines.append(f" * DO NOT EDIT — re-run the generator to update.")
-        lines.append(f" */")
-        lines.append(f"")
-        lines.append(f"#ifndef {guard}")
-        lines.append(f"#define {guard}")
-        lines.append(f"")
-        lines.append(f"#include <stdint.h>")
-        lines.append(f"#include <string.h>")
+        # Struct
+        lines.append(f"typedef struct {{")
+        for sig in msg.signals:
+            ctype = c_type_for_signal(sig)
+            comment_parts = []
+            if sig.scale != 1.0 or sig.offset != 0.0:
+                comment_parts.append(f"factor={sig.scale}, offset={sig.offset}")
+            if sig.unit:
+                comment_parts.append(f'unit="{sig.unit}"')
+            comment_parts.append(f"[{sig.minimum}, {sig.maximum}]")
+            if sig.comment:
+                comment_parts.append(sig.comment)
+            comment = ", ".join(comment_parts)
+            lines.append(f"    {ctype:10s} {sig.name};  /* {comment} */")
+        lines.append(f"}} {msg.name}_t;")
         lines.append(f"")
 
-        for msg in sorted(self.parser.messages.values(), key=lambda m: m.msg_id):
-            if not (self.is_tx(msg) or self.is_rx(msg)):
-                continue
-            uname = upper_name(msg.name)
-            lines.append(f"/* " + "=" * 70 + " */")
-            lines.append(
-                f"/* Message: {msg.name}  (0x{msg.msg_id:03X}, {msg.dlc} bytes, "
-                f"{self.direction_tag(msg)}, sender={msg.sender}) */"
-            )
-            lines.append(f"/* " + "=" * 70 + " */")
-            lines.append(f"")
-            lines.append(f"#define {uname}_ID          (0x{msg.msg_id:03X}U)")
-            lines.append(f"#define {uname}_DLC         ({msg.dlc}U)")
-            if msg.cycle_time > 0:
-                lines.append(f"#define {uname}_CYCLE_MS    ({msg.cycle_time}U)")
-            lines.append(f"")
-
-            # Value-description enums
-            for sig in msg.signals:
-                if sig.value_descriptions:
-                    for val, desc in sorted(sig.value_descriptions.items()):
-                        enum_name = f"{uname}_{upper_name(sig.name)}_{upper_name(desc.replace(' ', '_'))}"
-                        lines.append(f"#define {enum_name}  ({val}U)")
-                    lines.append(f"")
-
-            # Struct
-            lines.append(f"typedef struct {{")
-            for sig in msg.signals:
-                ctype = c_type_for_signal(sig)
-                comment_parts = []
-                if sig.factor != 1.0 or sig.offset != 0.0:
-                    comment_parts.append(f"factor={sig.factor}, offset={sig.offset}")
-                if sig.unit:
-                    comment_parts.append(f'unit="{sig.unit}"')
-                comment_parts.append(f"[{sig.minimum}, {sig.maximum}]")
-                if sig.comment:
-                    comment_parts.append(sig.comment)
-                comment = ", ".join(comment_parts)
-                lines.append(f"    {ctype:10s} {sig.name};  /* {comment} */")
-            lines.append(f"}} {msg.name}_t;")
-            lines.append(f"")
-
-            # Function prototypes
+        # Function prototypes — only needed directions
+        if msg_is_tx:
             lines.append(
                 f"int {msg.name}_pack(uint8_t *data, const {msg.name}_t *msg, uint8_t dlc);"
             )
+        if msg_is_rx:
             lines.append(
                 f"int {msg.name}_unpack({msg.name}_t *msg, const uint8_t *data, uint8_t dlc);"
             )
-            lines.append(f"")
-
-        lines.append(f"#endif /* {guard} */")
         lines.append(f"")
-        return "\n".join(lines)
+    # Global struct instance extern declarations
+    lines.append(f"/* " + "=" * 70 + " */")
+    lines.append(f"/*  Global message struct instances                                     */")
+    lines.append(f"/* " + "=" * 70 + " */")
+    lines.append(f"")
+    for msg in sorted(db.messages, key=lambda m: m.frame_id):
+        msg_is_tx = is_tx(msg, node)
+        msg_is_rx = is_rx(msg, node)
+        if not (msg_is_tx or msg_is_rx):
+            continue
+        if msg_is_tx:
+            lines.append(
+                f"extern {msg.name}_t g_tx_{msg.name};"
+                f"  /**< TX 0x{msg.frame_id:03X} - DLC={msg.length} */"
+            )
+        if msg_is_rx:
+            lines.append(
+                f"extern {msg.name}_t g_rx_{msg.name};"
+                f"  /**< RX 0x{msg.frame_id:03X} - DLC={msg.length} */"
+            )
+    lines.append(f"")
+    lines.append(f"#endif /* {guard} */")
+    lines.append(f"")
+    return "\n".join(lines)
 
-    # ----- source generation -----------------------------------------------
-    def generate_source(self, basename: str) -> str:
-        lines = []
-        lines.append(f"/**")
-        lines.append(f" * @file {basename}.c")
-        lines.append(f" * @brief Auto-generated CAN message pack/unpack implementation")
-        lines.append(f" *")
-        lines.append(f" * Generated from DBC by dbc_to_c_generator.py")
-        lines.append(f" * Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        lines.append(f" *")
-        lines.append(f" * DO NOT EDIT — re-run the generator to update.")
-        lines.append(f" */")
-        lines.append(f"")
-        lines.append(f'#include "{basename}.h"')
-        lines.append(f"")
 
-        for msg in sorted(self.parser.messages.values(), key=lambda m: m.msg_id):
-            if not (self.is_tx(msg) or self.is_rx(msg)):
-                continue
-            lines.extend(self._gen_pack(msg))
-            lines.append(f"")
-            lines.extend(self._gen_unpack(msg))
-            lines.append(f"")
+def _gen_pack(msg) -> list:
+    """Generate pack function for a message (struct -> CAN data bytes)."""
+    L = []
+    L.append(f"int {msg.name}_pack(uint8_t *data, const {msg.name}_t *msg, uint8_t dlc)")
+    L.append(f"{{")
+    L.append(f"    if ((data == (void *)0) || (msg == (void *)0)) {{ return -1; }}")
+    L.append(f"    if (dlc < {msg.length}U) {{ return -1; }}")
+    L.append(f"")
+    L.append(f"    (void)memset(data, 0, (size_t){msg.length}U);")
+    L.append(f"")
 
-        return "\n".join(lines)
+    for sig in msg.signals:
+        order_str = "Motorola" if sig.byte_order == "big_endian" else "Intel"
+        float_str = ""
+        if sig.is_float:
+            float_str = ", float" if sig.length <= 32 else ", double"
+        L.append(f"    /* {sig.name}: start_bit={sig.start}, len={sig.length}, "
+                 f"{order_str}{float_str} */")
 
-    # ----- pack ------------------------------------------------------------
-    def _gen_pack(self, msg: Message) -> List[str]:
-        L = []
-        L.append(f"int {msg.name}_pack(uint8_t *data, const {msg.name}_t *msg, uint8_t dlc)")
-        L.append(f"{{")
-        L.append(f"    if ((data == (void *)0) || (msg == (void *)0)) {{ return -1; }}")
-        L.append(f"    if (dlc < {msg.dlc}U) {{ return -1; }}")
-        L.append(f"")
-        L.append(f"    (void)memset(data, 0, (size_t)dlc);")
-        L.append(f"")
+        segs = byte_segments(sig)
 
-        for sig in msg.signals:
-            L.append(f"    /* {sig.name}: start_bit={sig.start_bit}, len={sig.length}, "
-                     f"{'Motorola' if sig.byte_order == 'big_endian' else 'Intel'}"
-                     f"{', float' if sig.value_type == 1 else ', double' if sig.value_type == 2 else ''} */")
-
-            segs = byte_segments(sig)
-
-            if sig.value_type == 1:
-                # IEEE float32 — memcpy to uint32_t, then pack bytes
-                L.append(f"    {{")
-                L.append(f"        uint32_t raw_val;")
-                L.append(f"        (void)memcpy(&raw_val, &msg->{sig.name}, sizeof(uint32_t));")
-                for byte_idx, low_bit, bits_here, rshift, mask in segs:
-                    if bits_here == 8 and low_bit == 0:
-                        L.append(f"        data[{byte_idx}] = (uint8_t)(raw_val >> {rshift}u);")
-                    else:
-                        L.append(
-                            f"        data[{byte_idx}] |= (uint8_t)"
-                            f"((raw_val >> {rshift}u) & 0x{mask:02X}u) << {low_bit}u;"
-                        )
-                L.append(f"    }}")
-
-            elif sig.value_type == 2:
-                # IEEE float64 — memcpy to uint64_t
-                L.append(f"    {{")
-                L.append(f"        uint64_t raw_val;")
-                L.append(f"        (void)memcpy(&raw_val, &msg->{sig.name}, sizeof(uint64_t));")
-                for byte_idx, low_bit, bits_here, rshift, mask in segs:
-                    if bits_here == 8 and low_bit == 0:
-                        L.append(f"        data[{byte_idx}] = (uint8_t)(raw_val >> {rshift}u);")
-                    else:
-                        L.append(
-                            f"        data[{byte_idx}] |= (uint8_t)"
-                            f"(((uint8_t)(raw_val >> {rshift}u)) & 0x{mask:02X}u) << {low_bit}u;"
-                        )
-                L.append(f"    }}")
-
-            else:
-                # Integer signal
-                rtype = raw_uint_type(sig.length)
-                suf = raw_uint_suffix(sig.length)
-                L.append(f"    {{")
-
-                # Apply inverse scaling if needed
-                if sig.factor != 1.0 or sig.offset != 0.0:
-                    L.append(f"        {rtype} raw_val = ({rtype})"
-                             f"((msg->{sig.name} - ({sig.offset})) / ({sig.factor}));")
+        if sig.is_float and sig.length <= 32:
+            # IEEE float32 — memcpy to uint32_t, then pack bytes
+            L.append(f"    {{")
+            L.append(f"        uint32_t raw_val;")
+            L.append(f"        (void)memcpy(&raw_val, &msg->{sig.name}, sizeof(uint32_t));")
+            for byte_idx, low_bit, bits_here, rshift, mask in segs:
+                if bits_here == 8 and low_bit == 0:
+                    L.append(f"        data[{byte_idx}] = (uint8_t)(raw_val >> {rshift}u);")
                 else:
-                    L.append(f"        {rtype} raw_val = ({rtype})msg->{sig.name};")
+                    L.append(
+                        f"        data[{byte_idx}] |= (uint8_t)"
+                        f"((raw_val >> {rshift}u) & 0x{mask:02X}u) << {low_bit}u;"
+                    )
+            L.append(f"    }}")
 
-                for byte_idx, low_bit, bits_here, rshift, mask in segs:
-                    if bits_here == 8 and low_bit == 0 and rshift == 0:
-                        L.append(f"        data[{byte_idx}] = (uint8_t)raw_val;")
-                    elif bits_here == 8 and low_bit == 0:
-                        L.append(f"        data[{byte_idx}] = (uint8_t)(raw_val >> {rshift}{suf});")
-                    elif rshift == 0:
-                        L.append(
-                            f"        data[{byte_idx}] |= (uint8_t)"
-                            f"(((uint8_t)raw_val) & 0x{mask:02X}u) << {low_bit}u;"
-                        )
-                    else:
-                        L.append(
-                            f"        data[{byte_idx}] |= (uint8_t)"
-                            f"(((uint8_t)(raw_val >> {rshift}{suf})) & 0x{mask:02X}u) << {low_bit}u;"
-                        )
-                L.append(f"    }}")
-
-        L.append(f"")
-        L.append(f"    return 0;")
-        L.append(f"}}")
-        return L
-
-    # ----- unpack ----------------------------------------------------------
-    def _gen_unpack(self, msg: Message) -> List[str]:
-        L = []
-        L.append(f"int {msg.name}_unpack({msg.name}_t *msg, const uint8_t *data, uint8_t dlc)")
-        L.append(f"{{")
-        L.append(f"    if ((data == (void *)0) || (msg == (void *)0)) {{ return -1; }}")
-        L.append(f"    if (dlc < {msg.dlc}U) {{ return -1; }}")
-        L.append(f"")
-
-        for sig in msg.signals:
-            L.append(f"    /* {sig.name} */")
-            segs = byte_segments(sig)
-
-            if sig.value_type == 1:
-                # IEEE float32
-                L.append(f"    {{")
-                L.append(f"        uint32_t raw_val = 0u;")
-                for byte_idx, low_bit, bits_here, rshift, mask in segs:
-                    if bits_here == 8 and low_bit == 0:
-                        L.append(f"        raw_val |= ((uint32_t)data[{byte_idx}]) << {rshift}u;")
-                    else:
-                        L.append(
-                            f"        raw_val |= ((uint32_t)(data[{byte_idx}] >> {low_bit}u)"
-                            f" & 0x{mask:02X}u) << {rshift}u;"
-                        )
-                L.append(f"        (void)memcpy(&msg->{sig.name}, &raw_val, sizeof(float));")
-                L.append(f"    }}")
-
-            elif sig.value_type == 2:
-                # IEEE float64
-                L.append(f"    {{")
-                L.append(f"        uint64_t raw_val = 0u;")
-                for byte_idx, low_bit, bits_here, rshift, mask in segs:
-                    if bits_here == 8 and low_bit == 0:
-                        L.append(f"        raw_val |= ((uint64_t)data[{byte_idx}]) << {rshift}u;")
-                    else:
-                        L.append(
-                            f"        raw_val |= ((uint64_t)(data[{byte_idx}] >> {low_bit}u)"
-                            f" & 0x{mask:02X}u) << {rshift}u;"
-                        )
-                L.append(f"        (void)memcpy(&msg->{sig.name}, &raw_val, sizeof(double));")
-                L.append(f"    }}")
-
-            else:
-                # Integer signal
-                rtype = raw_uint_type(sig.length)
-                suf = raw_uint_suffix(sig.length)
-                ctype = c_type_for_signal(sig)
-                L.append(f"    {{")
-                L.append(f"        {rtype} raw_val = 0u;")
-
-                for byte_idx, low_bit, bits_here, rshift, mask in segs:
-                    cast = f"({rtype})" if sig.length > 8 else ""
-                    if bits_here == 8 and low_bit == 0 and rshift == 0:
-                        L.append(f"        raw_val |= {cast}data[{byte_idx}];")
-                    elif bits_here == 8 and low_bit == 0:
-                        L.append(f"        raw_val |= {cast}data[{byte_idx}] << {rshift}{suf};")
-                    elif rshift == 0:
-                        L.append(
-                            f"        raw_val |= {cast}(data[{byte_idx}] >> {low_bit}u)"
-                            f" & 0x{mask:02X}u;"
-                        )
-                    else:
-                        L.append(
-                            f"        raw_val |= ({cast}(data[{byte_idx}] >> {low_bit}u)"
-                            f" & 0x{mask:02X}u) << {rshift}{suf};"
-                        )
-
-                # Sign extension for signed integers
-                if sig.is_signed and sig.length < {8: 8, 16: 16, 32: 32, 64: 64}.get(sig.length, 64):
-                    type_bits = 8
-                    if sig.length > 8:
-                        type_bits = 16
-                    if sig.length > 16:
-                        type_bits = 32
-                    if sig.length > 32:
-                        type_bits = 64
-                    if sig.length < type_bits:
-                        L.append(f"        /* sign extension */")
-                        L.append(
-                            f"        if ((raw_val & (1{suf} << {sig.length - 1}u)) != 0u) {{"
-                        )
-                        fill_mask = ((1 << type_bits) - 1) ^ ((1 << sig.length) - 1)
-                        L.append(f"            raw_val |= 0x{fill_mask:X}{suf};")
-                        L.append(f"        }}")
-
-                # Apply scaling
-                if sig.factor != 1.0 or sig.offset != 0.0:
-                    if sig.is_signed:
-                        L.append(
-                            f"        msg->{sig.name} = ({ctype})"
-                            f"(({ctype})({raw_uint_type(sig.length).replace('u','')}_t)raw_val"
-                            f" * {sig.factor} + {sig.offset});"
-                        )
-                    else:
-                        L.append(
-                            f"        msg->{sig.name} = ({ctype})"
-                            f"(raw_val * {sig.factor} + {sig.offset});"
-                        )
+        elif sig.is_float and sig.length > 32:
+            # IEEE float64 — memcpy to uint64_t
+            L.append(f"    {{")
+            L.append(f"        uint64_t raw_val;")
+            L.append(f"        (void)memcpy(&raw_val, &msg->{sig.name}, sizeof(uint64_t));")
+            for byte_idx, low_bit, bits_here, rshift, mask in segs:
+                if bits_here == 8 and low_bit == 0:
+                    L.append(f"        data[{byte_idx}] = (uint8_t)(raw_val >> {rshift}u);")
                 else:
-                    L.append(f"        msg->{sig.name} = ({ctype})raw_val;")
+                    L.append(
+                        f"        data[{byte_idx}] |= (uint8_t)"
+                        f"(((uint8_t)(raw_val >> {rshift}u)) & 0x{mask:02X}u) << {low_bit}u;"
+                    )
+            L.append(f"    }}")
 
-                L.append(f"    }}")
+        else:
+            # Integer signal
+            rtype = raw_uint_type(sig.length)
+            suf = raw_uint_suffix(sig.length)
+            L.append(f"    {{")
 
-        L.append(f"")
-        L.append(f"    return 0;")
-        L.append(f"}}")
-        return L
+            # Apply inverse scaling if needed
+            if sig.scale != 1.0 or sig.offset != 0.0:
+                L.append(f"        {rtype} raw_val = ({rtype})"
+                         f"((msg->{sig.name} - ({sig.offset})) / ({sig.scale}));")
+            else:
+                L.append(f"        {rtype} raw_val = ({rtype})msg->{sig.name};")
+
+            for byte_idx, low_bit, bits_here, rshift, mask in segs:
+                if bits_here == 8 and low_bit == 0 and rshift == 0:
+                    L.append(f"        data[{byte_idx}] = (uint8_t)raw_val;")
+                elif bits_here == 8 and low_bit == 0:
+                    L.append(f"        data[{byte_idx}] = (uint8_t)(raw_val >> {rshift}{suf});")
+                elif rshift == 0:
+                    L.append(
+                        f"        data[{byte_idx}] |= (uint8_t)"
+                        f"(((uint8_t)raw_val) & 0x{mask:02X}u) << {low_bit}u;"
+                    )
+                else:
+                    L.append(
+                        f"        data[{byte_idx}] |= (uint8_t)"
+                        f"(((uint8_t)(raw_val >> {rshift}{suf})) & 0x{mask:02X}u) << {low_bit}u;"
+                    )
+            L.append(f"    }}")
+
+    L.append(f"")
+    L.append(f"    return 0;")
+    L.append(f"}}")
+    return L
+
+
+def _gen_unpack(msg) -> list:
+    """Generate unpack function for a message (CAN data bytes -> struct)."""
+    L = []
+    L.append(f"int {msg.name}_unpack({msg.name}_t *msg, const uint8_t *data, uint8_t dlc)")
+    L.append(f"{{")
+    L.append(f"    if ((data == (void *)0) || (msg == (void *)0)) {{ return -1; }}")
+    L.append(f"    if (dlc < {msg.length}U) {{ return -1; }}")
+    L.append(f"")
+
+    for sig in msg.signals:
+        L.append(f"    /* {sig.name} */")
+        segs = byte_segments(sig)
+
+        if sig.is_float and sig.length <= 32:
+            # IEEE float32
+            L.append(f"    {{")
+            L.append(f"        uint32_t raw_val = 0u;")
+            for byte_idx, low_bit, bits_here, rshift, mask in segs:
+                if bits_here == 8 and low_bit == 0:
+                    L.append(f"        raw_val |= ((uint32_t)data[{byte_idx}]) << {rshift}u;")
+                else:
+                    L.append(
+                        f"        raw_val |= ((uint32_t)(data[{byte_idx}] >> {low_bit}u)"
+                        f" & 0x{mask:02X}u) << {rshift}u;"
+                    )
+            L.append(f"        (void)memcpy(&msg->{sig.name}, &raw_val, sizeof(float));")
+            L.append(f"    }}")
+
+        elif sig.is_float and sig.length > 32:
+            # IEEE float64
+            L.append(f"    {{")
+            L.append(f"        uint64_t raw_val = 0u;")
+            for byte_idx, low_bit, bits_here, rshift, mask in segs:
+                if bits_here == 8 and low_bit == 0:
+                    L.append(f"        raw_val |= ((uint64_t)data[{byte_idx}]) << {rshift}u;")
+                else:
+                    L.append(
+                        f"        raw_val |= ((uint64_t)(data[{byte_idx}] >> {low_bit}u)"
+                        f" & 0x{mask:02X}u) << {rshift}u;"
+                    )
+            L.append(f"        (void)memcpy(&msg->{sig.name}, &raw_val, sizeof(double));")
+            L.append(f"    }}")
+
+        else:
+            # Integer signal
+            rtype = raw_uint_type(sig.length)
+            suf = raw_uint_suffix(sig.length)
+            ctype = c_type_for_signal(sig)
+            L.append(f"    {{")
+            L.append(f"        {rtype} raw_val = 0u;")
+
+            for byte_idx, low_bit, bits_here, rshift, mask in segs:
+                cast = f"({rtype})" if sig.length > 8 else ""
+                if bits_here == 8 and low_bit == 0 and rshift == 0:
+                    L.append(f"        raw_val |= {cast}data[{byte_idx}];")
+                elif bits_here == 8 and low_bit == 0:
+                    L.append(f"        raw_val |= {cast}data[{byte_idx}] << {rshift}{suf};")
+                elif rshift == 0:
+                    L.append(
+                        f"        raw_val |= {cast}(data[{byte_idx}] >> {low_bit}u)"
+                        f" & 0x{mask:02X}u;"
+                    )
+                else:
+                    L.append(
+                        f"        raw_val |= ({cast}(data[{byte_idx}] >> {low_bit}u)"
+                        f" & 0x{mask:02X}u) << {rshift}{suf};"
+                    )
+
+            # Sign extension for signed integers
+            if sig.is_signed:
+                type_bits = type_bits_for_length(sig.length)
+                if sig.length < type_bits:
+                    L.append(f"        /* sign extension */")
+                    L.append(
+                        f"        if ((raw_val & (1{suf} << {sig.length - 1}u)) != 0u) {{"
+                    )
+                    fill_mask = ((1 << type_bits) - 1) ^ ((1 << sig.length) - 1)
+                    L.append(f"            raw_val |= 0x{fill_mask:X}{suf};")
+                    L.append(f"        }}")
+
+            # Apply scaling
+            if sig.scale != 1.0 or sig.offset != 0.0:
+                if sig.is_signed:
+                    signed_type = raw_uint_type(sig.length).replace("uint", "int")
+                    L.append(
+                        f"        msg->{sig.name} = ({ctype})"
+                        f"(({ctype})({signed_type})raw_val"
+                        f" * {sig.scale} + {sig.offset});"
+                    )
+                else:
+                    L.append(
+                        f"        msg->{sig.name} = ({ctype})"
+                        f"(raw_val * {sig.scale} + {sig.offset});"
+                    )
+            else:
+                L.append(f"        msg->{sig.name} = ({ctype})raw_val;")
+
+            L.append(f"    }}")
+
+    L.append(f"")
+    L.append(f"    return 0;")
+    L.append(f"}}")
+    return L
+
+
+def generate_source(db, basename: str, node: str) -> str:
+    """Generate the .c source file content."""
+    lines = []
+    lines.append(f"/**")
+    lines.append(f" * @file {basename}.c")
+    lines.append(f" * @brief Auto-generated CAN message pack/unpack implementation")
+    lines.append(f" *")
+    lines.append(f" * Generated from DBC by dbc_to_c_generator.py (cantools-based)")
+    lines.append(f" * Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f" *")
+    lines.append(f" * DO NOT EDIT — re-run the generator to update.")
+    lines.append(f" */")
+    lines.append(f"")
+    lines.append(f'#include "{basename}.h"')
+    lines.append(f"")
+
+    # Global struct instance definitions
+    lines.append(f"/* " + "=" * 70 + " */")
+    lines.append(f"/*  Global message struct instances                                     */")
+    lines.append(f"/* " + "=" * 70 + " */")
+    for msg in sorted(db.messages, key=lambda m: m.frame_id):
+        msg_is_tx = is_tx(msg, node)
+        msg_is_rx = is_rx(msg, node)
+        if not (msg_is_tx or msg_is_rx):
+            continue
+        if msg_is_tx:
+            lines.append(f"{msg.name}_t g_tx_{msg.name} = {{0}};")
+        if msg_is_rx:
+            lines.append(f"{msg.name}_t g_rx_{msg.name} = {{0}};")
+    lines.append(f"")
+
+    for msg in sorted(db.messages, key=lambda m: m.frame_id):
+        msg_is_tx = is_tx(msg, node)
+        msg_is_rx = is_rx(msg, node)
+        if not (msg_is_tx or msg_is_rx):
+            continue
+
+        # TX message: generate pack only
+        if msg_is_tx:
+            lines.extend(_gen_pack(msg))
+            lines.append(f"")
+
+        # RX message: generate unpack only
+        if msg_is_rx:
+            lines.extend(_gen_unpack(msg))
+            lines.append(f"")
+
+    return "\n".join(lines)
 
 
 # ===========================================================================
 #  Main
 # ===========================================================================
 
+def _auto_find_dbc(script_dir: Path) -> Path:
+    """Search for .dbc files in the SOA_DBC_File subfolder next to this script."""
+    dbc_dir = script_dir / "SOA_DBC_File"
+    if not dbc_dir.is_dir():
+        print(f"ERROR: DBC folder not found: {dbc_dir}", file=sys.stderr)
+        sys.exit(1)
+    dbc_files = list(dbc_dir.glob("*.dbc"))
+    if len(dbc_files) == 0:
+        print(f"ERROR: No .dbc files found in {dbc_dir}", file=sys.stderr)
+        sys.exit(1)
+    if len(dbc_files) > 1:
+        print(f"WARNING: Multiple .dbc files found, using the first one: {dbc_files[0].name}")
+    return dbc_files[0]
+
+
+def _auto_select_node(db) -> str:
+    """Auto-select the M-Core node from the DBC database by pattern matching."""
+    node_names = [n.name for n in db.nodes]
+    # Priority 1: match "M_CORE" (case-insensitive)
+    for name in node_names:
+        if "M_CORE" in name.upper():
+            return name
+    # Priority 2: match "M_Core" or "MCU" or "Mcore"
+    for name in node_names:
+        upper = name.upper()
+        if "MCORE" in upper or "MCU" in upper:
+            return name
+    # Fallback: None (generate for all nodes)
+    print("WARNING: No M-Core node found, generating for ALL nodes.")
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser(
-        description="Generate C pack/unpack code from a Vector DBC file."
+        description="Generate C pack/unpack code from a Vector DBC file (using cantools).\n"
+                    "When run WITHOUT arguments, auto-detects DBC file from SOA_DBC_File/ subfolder,\n"
+                    "outputs to ../../Can_tools_generated, and auto-selects the M_CORE node.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("dbc", help="Path to the input .dbc file")
-    ap.add_argument("outdir", help="Output directory for generated .h / .c")
+    ap.add_argument("dbc", nargs="?", default=None, help="Path to the input .dbc file (auto-detected if omitted)")
+    ap.add_argument("outdir", nargs="?", default=None, help="Output directory for generated .h / .c (auto-detected if omitted)")
     ap.add_argument(
         "--node",
         default=None,
-        help="Target ECU node name. Only messages TX/RX by this node are generated.",
+        help="Target ECU node name. Only messages TX/RX by this node are generated. (auto-detected if omitted)",
     )
     args = ap.parse_args()
 
-    dbc_path = Path(args.dbc).resolve()
-    out_dir = Path(args.outdir).resolve()
+    script_dir = Path(__file__).resolve().parent
+
+    # --- Auto-detect DBC file ---
+    if args.dbc is not None:
+        dbc_path = Path(args.dbc).resolve()
+    else:
+        dbc_path = _auto_find_dbc(script_dir)
+        print(f"[Auto] DBC file: {dbc_path}")
+
+    # --- Auto-detect output directory ---
+    if args.outdir is not None:
+        out_dir = Path(args.outdir).resolve()
+    else:
+        out_dir = (script_dir / ".." / ".." / "Can_tools_generated").resolve()
+        print(f"[Auto] Output dir: {out_dir}")
 
     if not dbc_path.is_file():
         print(f"ERROR: DBC file not found: {dbc_path}", file=sys.stderr)
@@ -706,17 +631,23 @@ def main():
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Parse
-    parser = DbcParser()
-    parser.parse(str(dbc_path))
-    print(f"Parsed {len(parser.messages)} messages, nodes: {parser.nodes}")
+    # Parse using cantools
+    db = cantools.database.load_file(str(dbc_path))
+    print(f"[cantools] Parsed {len(db.messages)} messages, nodes: {db.nodes}")
+
+    # --- Auto-detect node ---
+    if args.node is not None:
+        node = args.node
+    else:
+        node = _auto_select_node(db)
+        if node:
+            print(f"[Auto] Selected node: {node}")
 
     # Generate
     basename = dbc_path.stem  # e.g. "CANdbc_file"
-    gen = CCodeGenerator(parser, node=args.node)
 
-    h_content = gen.generate_header(basename)
-    c_content = gen.generate_source(basename)
+    h_content = generate_header(db, basename, node)
+    c_content = generate_source(db, basename, node)
 
     h_path = out_dir / f"{basename}.h"
     c_path = out_dir / f"{basename}.c"
@@ -728,11 +659,18 @@ def main():
     print(f"Generated: {c_path}")
 
     # Summary
-    for msg in sorted(parser.messages.values(), key=lambda m: m.msg_id):
-        tag = gen.direction_tag(msg)
+    for msg in sorted(db.messages, key=lambda m: m.frame_id):
+        tag = direction_tag(msg, node)
+        sender_str = ", ".join(msg.senders) if msg.senders else "N/A"
+        funcs = []
+        if is_tx(msg, node):
+            funcs.append("pack")
+        if is_rx(msg, node):
+            funcs.append("unpack")
         print(
-            f"  0x{msg.msg_id:03X}  {msg.name:30s}  DLC={msg.dlc}  "
-            f"[{tag}]  signals={len(msg.signals)}"
+            f"  0x{msg.frame_id:03X}  {msg.name:30s}  DLC={msg.length}  "
+            f"[{tag}]  signals={len(msg.signals)}  "
+            f"sender={sender_str}  functions=[{', '.join(funcs)}]"
         )
 
 

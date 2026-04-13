@@ -10,31 +10,33 @@
 *********************************************************************************
 *
 *  File name:           $Source: diag_mgmt.c $
-*  Revision:            $Revision: 1.1 $
+*  Revision:            $Revision: 2.0 $
 *  Author:              $Author: Auto Generated $
 *  Module acronym:      DIAG_MGMT
 *  Specification:       Schaeffler_A-Sample Diagnostic Management (DoIP Activation Line)
-*  Date:                $Date: 2026/04/02 $
+*  Date:                $Date: 2026/04/08 $
 *
 *  Description:     Diagnostic Management module implementation
-*                   Implements DIAG_4: M-Core (Server, ProviderID=52) sends
-*                   DoIP activation line status to A-Core (Client, ConsumerID=60)
-*                   via IPCF Event notification.
+*                   Implements DIAG_4: M-Core (Client, ConsumerID=60) sends
+*                   DoIP activation line status to A-Core (Server, ProviderID=52)
+*                   via IPCF Method Request (Fire-and-Forget).
 *
-*                   Roles:
-*                     M-Core = Server: does NOT send link-connect requests.
-*                     A-Core = Client: sends link-connect requests to M-Core.
+*                   Roles (per Schaeffler_A-Sample design document):
+*                     A-Core = Server (ProviderID=52, AsfDiagnosticInfo)
+*                     M-Core = Client (ConsumerID=60, SWC)
 *
-*                   Send mechanism: PICC_SendEvent (Server->Client notification)
-*                     EventID=5, payload=Test_input value, 30ms period
-*                     NOTIFICATION_WITHOUT_ACK (per M-Core real-time constraints)
+*                   Send mechanism: PICC_MethodRequest (Client->Server request)
+*                     MethodID=5, payload=Test_input value, 30ms period
+*                     PICC_METHOD_NO_RETURN_WITHOUT_ACK (Fire-and-Forget)
+*                     M-Core cannot synchronously wait (real-time constraints)
 *
 *********************************************************************************
 *
 *  Changes:
-*    v1.1: Fixed M-Core role from CLIENT to SERVER (ProviderID=52).
-*          Changed send from PICC_MethodRequest to PICC_SendEvent.
-*          Server is passive for link, no connect requests sent.
+*    v2.0: Corrected M-Core role from SERVER to CLIENT per Schaeffler doc.
+*          Changed send from PICC_SendEvent to PICC_MethodRequest.
+*          Client actively sends link-connect requests.
+*          localId=60(Consumer), remoteId=52(Provider).
 *
 *********************************************************************************/
 
@@ -74,26 +76,30 @@ static uint16 DiagMgmt_PeriodCounter = 0U;
  *
  *  Description      : Initialize DiagMgmt module and register with PICC driver
  *
- *  Configuration:
- *    - localId  = DIAG_MGMT_PROVIDER_ID (52) — M-Core is Server (provider)
- *    - remoteId = DIAG_MGMT_CONSUMER_ID (60) — A-Core is Client (consumer)
- *    - role     = PICC_ROLE_SERVER
+ *  Configuration (per Schaeffler_A-Sample design document):
+ *    - localId  = DIAG_MGMT_CONSUMER_ID (60, 0x3C) — M-Core is Client
+ *    - remoteId = DIAG_MGMT_PROVIDER_ID (52, 0x34) — A-Core is Server
+ *    - role     = PICC_ROLE_CLIENT
  *    - channel  = 1 (HP)
+ *    - Client_linkReq_PeriodMs = 10ms (CLIENT actively sends link requests)
  *    - No callbacks (polling mode)
  *
- *  As SERVER, M-Core does NOT send link-connect requests.
- *  A-Core (Client, ConsumerID=60) will initiate the connection.
+ *  As CLIENT, M-Core actively sends link-connect requests to A-Core Server.
+ *  Link request report (before A-Core Server responds):
+ *    34 00 3C 00 00 01 00 05 01 xx xx xx xx
+ *  A-Core Server reply:
+ *    34 00 3C 00 00 00 00 05 01 xx xx xx xx
  *
  ***********************************************************************************************************************/
 void DiagMgmt_Init(void)
 {
     static const PICC_AppConfig_t diagMgmt_cfg = {
-        .localId                = DIAG_MGMT_PROVIDER_ID,   /* 52 (0x34) - M-Core Server */
-        .remoteId               = DIAG_MGMT_CONSUMER_ID,   /* 60 (0x3C) - A-Core Client */
-        .role                   = PICC_ROLE_SERVER,
+        .localId                = DIAG_MGMT_CONSUMER_ID,   /* 60 (0x3C) - M-Core Client */
+        .remoteId               = DIAG_MGMT_PROVIDER_ID,   /* 52 (0x34) - A-Core Server */
+        .role                   = PICC_ROLE_CLIENT,
         .channelId              = DIAG_MGMT_CHANNEL_ID,    /* 1 (HP) */
-        .Client_linkReq_PeriodMs = 0U,                     /* Ignored for SERVER role */
-        .methodHandler          = NULL,  /* No Method handler needed */
+        .Client_linkReq_PeriodMs = DIAG_MGMT_LINK_REQ_PERIOD_MS, /* 10ms link request period */
+        .methodHandler          = NULL,  /* No Method handler needed (Client doesn't receive requests) */
         .eventHandler           = NULL   /* No Event handler needed */
     };
 
@@ -111,12 +117,26 @@ void DiagMgmt_Init(void)
  *  Logic:
  *    1. Every 10ms call, increment PeriodCounter.
  *    2. Every 30ms (PeriodCounter % 3 == 0), check Test_input:
- *       - If Test_input == 0: no Event is sent (kNoObd).
- *       - If Test_input == 1: send Event with payload = 1 (kObdCan, high priority).
- *       - If Test_input == 2: send Event with payload = 2 (kObdEth).
- *    3. Uses PICC_SendEvent with PICC_EVENT_WITHOUT_ACK.
- *       Per IPCF protocol: M-Core only sends Event without ACK due to
- *       real-time constraints (no synchronous wait).
+ *       - If Test_input == 0: no Method Request is sent (kNoObd).
+ *       - If Test_input == 1: send Method Request with payload = 1 (kObdCan, high priority).
+ *       - If Test_input == 2: send Method Request with payload = 2 (kObdEth).
+ *    3. Uses PICC_MethodRequest with PICC_METHOD_NO_RETURN_WITHOUT_ACK.
+ *       Per IPCF protocol: M-Core is Client, uses Fire-and-Forget because
+ *       M-Core cannot synchronously wait for Response (real-time constraints).
+ *       This is a status report — no business response is needed from A-Core.
+ *
+ *  Protocol frame constructed by PICC driver:
+ *    ProviderID = 52 (0x34) — A-Core Server (remoteId)
+ *    MethodID   = 5         — DoIP activation line
+ *    ConsumerID = 60 (0x3C) — M-Core Client (localId)
+ *    SessionID  = 0x00      — Fire-and-Forget, no session tracking needed
+ *    MessageType= 0x07      — REQUEST_NO_RETURN_WITHOUT_ACK
+ *    ReturnCode = 0x00
+ *    Length     = 0x0001    — 1 byte payload
+ *    Payload    = currentInput (1=kObdCan, 2=kObdEth)
+ *
+ *  Example frame when Test_input=1:
+ *    34 05 3C 00 07 00 00 01 01
  *
  ***********************************************************************************************************************/
 void DiagMgmt_Main(void)
@@ -132,27 +152,26 @@ void DiagMgmt_Main(void)
         if (currentInput != DIAG_MGMT_NO_OBD)
         {
             /*
-             * Test_input is 1 (kObdCan) or 2 (kObdEth) — send Event notification.
+             * Test_input is 1 (kObdCan) or 2 (kObdEth) — send Method Request.
              *
-             * Protocol frame (constructed by PICC driver):
-             *   ProviderID = 52 (0x34) — M-Core Server
-             *   EventID    = 5         — DoIP activation line
-             *   ConsumerID = 60 (0x3C) — A-Core Client
-             *   SessionID  = 0x00      — No ACK, no session tracking
-             *   MessageType= 0x09      — NOTIFICATION_WITHOUT_ACK
-             *   ReturnCode = 0x00
-             *   Length     = 0x0001    — 1 byte payload
+             * M-Core (Client) -> A-Core (Server) Method Request:
+             *   ProviderID = 52 (0x34) — A-Core Server
+             *   MethodID   = 5         — DoIP activation line
+             *   ConsumerID = 60 (0x3C) — M-Core Client
+             *   MessageType= 0x07      — REQUEST_NO_RETURN_WITHOUT_ACK
              *   Payload    = currentInput (1=kObdCan, 2=kObdEth)
+             *
+             * Fire-and-Forget: no Response expected, session ID is ignored.
              */
             uint8 payload[1];
             payload[0] = currentInput;
 
-            (void)PICC_SendEvent(PICC_APP_RSV0,
-                                 DIAG_MGMT_EVENT_DOIP_ACT_LINE,
-                                 payload,
-                                 1U,
-                                 PICC_EVENT_WITHOUT_ACK);
+            (void)PICC_MethodRequest(PICC_APP_RSV0,
+                                     DIAG_MGMT_METHOD_DOIP_ACT_LINE,
+                                     payload,
+                                     1U,
+                                     PICC_METHOD_NO_RETURN_WITHOUT_ACK);
         }
-        /* else: Test_input == 0 (kNoObd), no Event sent */
+        /* else: Test_input == 0 (kNoObd), no Method Request sent */
     }
 }
