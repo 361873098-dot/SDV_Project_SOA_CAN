@@ -3,7 +3,7 @@
  * @brief Auto-generated CAN message pack/unpack interface
  *
  * Generated from DBC by dbc_to_c_generator.py (cantools-based)
- * Date: 2026-04-13 17:13:04
+ * Date: 2026-04-13 18:03:26
  *
  * DO NOT EDIT — re-run the generator to update.
  */
