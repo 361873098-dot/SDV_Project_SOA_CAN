@@ -218,7 +218,12 @@ static void PICC_DiagRecordAdd(PICC_DiagRecord_t *record, const uint8 *data, uin
             continue;
         }
 
-
+        /* Filter: only record DiagMgmt (activation line) messages
+         * ProviderID (byte[0]) == 0x34 (52) AND ConsumerID (byte[2]) == 0x3C (60) */
+        if ((msgPtr[0] != 0x34U) || (msgPtr[2] != 0x3CU)) {
+            offset += msgLen;
+            continue;
+        }
 
         /* Store this protocol message in a new row */
         row = record->currentRow;
