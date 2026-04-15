@@ -206,6 +206,14 @@ void PICC_LinkProcess(void)
         if ((ctx->config.role == PICC_ROLE_CLIENT) &&
             (ctx->state == PICC_LINK_STATE_CONNECTING)) {
 
+            /* [FIX] Skip sending if channel heartbeat is DOWN.
+             * If the physical channel is not connected (heartbeat timeout),
+             * there is no point sending connection requests — they will fail
+             * and waste resources. Wait until channel recovers. */
+            if (PICC_LinkGetState(ctx->config.channelId) != PICC_LINK_STATE_CONNECTED) {
+                continue;
+            }
+
             /* Per-app period timing */
             uint16 periodTicks;
             sint8 sendResult;
@@ -445,6 +453,13 @@ sint8 PICC_LinkHandleRequest(const PICC_MsgHeader_t *header,
     linkPayload = (const PICC_LinkPayload_t *)payload;
 
     if (linkPayload->subType == (uint8)PICC_LINK_CONNECT) {
+
+        /* [FIX] Reject connection request if channel heartbeat is DOWN.
+         * If the physical channel is not connected (heartbeat timeout),
+         * server should not accept any new connections. */
+        if (PICC_LinkGetState(channelId) != PICC_LINK_STATE_CONNECTED) {
+            return 0;  /* Silently ignore — channel not healthy */
+        }
 
         /* Find matching app context by header IDs */
         ctx = PICC_GetLinkContextByHeader(header->providerId, header->consumerId, channelId);
