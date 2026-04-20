@@ -136,6 +136,7 @@ uint8 PICC_ServiceMethodSend(uint8 providerId, uint8 methodId,
 /**
  * @brief Send Method response (Server role)
  * 
+ * @param[in] providerId Local server's ProviderID
  * @param[in] consumerId Target client ID
  * @param[in] methodId   Method ID
  * @param[in] sessionId  Session ID
@@ -144,7 +145,7 @@ uint8 PICC_ServiceMethodSend(uint8 providerId, uint8 methodId,
  * @param[in] len        Response data length
  * @return 0 on success, non-zero on failure
  */
-sint8 PICC_ServiceResponseSend(uint8 consumerId, uint8 methodId,
+sint8 PICC_ServiceResponseSend(uint8 providerId, uint8 consumerId, uint8 methodId,
                                uint8 sessionId, uint8 returnCode,
                                const uint8 *data, uint16 len,
                                uint8 instanceId, uint8 channelId);

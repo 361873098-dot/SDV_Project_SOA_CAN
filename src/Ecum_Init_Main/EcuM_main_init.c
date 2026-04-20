@@ -57,6 +57,9 @@ extern "C" {
 /* Centralized task management */
 #include "Ostask_main.h"
 
+#include "hm.h"
+
+
 /** FlexCAN instance */
 #define FLEXCAN_INST 0U
 
@@ -64,7 +67,6 @@ extern "C" {
  *                                  PRIVATE FUNCTION DECLARATIONS
  *==================================================================================================*/
 
-static void App_Init_All(void);
 
 /*==================================================================================================
  *                                  PRIVATE FUNCTION DEFINITIONS
@@ -74,7 +76,8 @@ static void App_Init_All(void)
 {
   /* Register application-level PICC endpoints after middleware is ready. */
   Pwsm_Init();
-  DiagMgmt_Init();
+  //DiagMgmt_Init();
+  Hm_Init();
   //OTA_Init();
 }
 

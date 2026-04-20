@@ -50,6 +50,7 @@ extern "C"{
 
 /* Event-driven task declaration */
 #include "Picc_main.h"               /* App_Rx_Msg_10ms_Task()                  */
+#include "hm.h"
 
 /*==================================================================================================
  *                                         MACRO DEFINITIONS
@@ -145,7 +146,8 @@ void TASK_M0_10MS(void)
     Pwsm_Main();
 
     /* Diagnostic Management: DoIP activation line status (30ms period) */
-    DiagMgmt_Main();
+   // DiagMgmt_Main();
+	Hm_Main();
 
 #if (PICC_DIAG_RECORD_ENABLE == 1U)
     /* Update link state diagnostics (appLinkState + channelLinkState) */

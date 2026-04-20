@@ -116,6 +116,7 @@ void PICC_StoreCallbackResult(const PICC_MsgHeader_t *header,
  */
 sint8 PICC_MailboxGetMethodData(PICC_AppIndex_e appIndex, uint8 methodId,
                                 uint8 *data, uint16 maxLen, uint16 *actualLen,
+                                uint8 *outSessionId,
                                 uint8 *cbResult, uint16 *cbResultLen);
 
 /**

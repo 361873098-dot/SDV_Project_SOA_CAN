@@ -203,6 +203,7 @@ static sint8 PICC_ServiceHandleRequest(const PICC_MsgHeader_t *header,
     uint8 returnCode = (uint8)PICC_RET_OK;
     uint16 rspLen = 0U;
     PICC_MsgHeader_t rspHeader;
+    boolean handlerFound = FALSE;
 
     /* Initialize callback result to empty */
     *cbResultLen = 0U;
@@ -227,12 +228,16 @@ static sint8 PICC_ServiceHandleRequest(const PICC_MsgHeader_t *header,
                                                       payload, len,
                                                       g_rspBuffer, &rspLen,
                                                       cbResult, cbResultLen);
+            handlerFound = TRUE;
             break;  /* Only one handler matches */
         }
     }
 
-    /* If REQUEST requires Response, send response */
-    if (header->msgType == (uint8)PICC_MSG_REQUEST) {
+    /* If REQUEST requires Response, ONLY auto-send when a methodHandler callback
+     * was found and executed. When no handler is registered (polling mode via
+     * PICC_GetMethodData), the application is responsible for sending the
+     * RESPONSE manually via PICC_MethodResponse(). */
+    if ((header->msgType == (uint8)PICC_MSG_REQUEST) && (handlerFound == TRUE)) {
         rspHeader.providerId = header->providerId;
         rspHeader.methodId   = header->methodId;
         rspHeader.consumerId = header->consumerId;
@@ -462,7 +467,7 @@ uint8 PICC_ServiceMethodSend(uint8 providerId, uint8 methodId,
 /**
  * @brief Send Method response (Server role)
  */
-sint8 PICC_ServiceResponseSend(uint8 consumerId, uint8 methodId,
+sint8 PICC_ServiceResponseSend(uint8 providerId, uint8 consumerId, uint8 methodId,
                                uint8 sessionId, uint8 returnCode,
                                const uint8 *data, uint16 len,
                                uint8 instanceId, uint8 channelId)
@@ -477,7 +482,7 @@ sint8 PICC_ServiceResponseSend(uint8 consumerId, uint8 methodId,
         return -1;
     }
 
-    header.providerId = 0U;  /* Set by caller */
+    header.providerId = providerId;
     header.methodId   = methodId;
     header.consumerId = consumerId;
     header.sessionId  = sessionId;

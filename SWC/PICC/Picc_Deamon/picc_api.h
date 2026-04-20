@@ -271,13 +271,16 @@ sint8 PICC_MethodResponse(PICC_AppIndex_e appIndex, uint8 methodId,
  * callback was registered, this function also retrieves the secondary calculation result 
  * ('cbResult') produced instantly by that callback.
  *
- * @param[in]  appIndex    M-Core Application index (e.g., PICC_APP_OTA).
- * @param[in]  methodId    The specific Method ID M-Core is looking for.
- * @param[out] data        Buffer to store the raw payload data sent by A-Core.
- * @param[in]  maxLen      Maximum size of the 'data' buffer provided by M-Core.
- * @param[out] actualLen   Returns the actual length of the payload data received from A-Core.
- * @param[out] cbResult    Buffer to store the result produced by the M-Core callback handler (pass NULL if not needed/registered).
- * @param[out] cbResultLen Returns the length of the callback result (pass NULL if not needed/registered).
+ * @param[in]  appIndex     M-Core Application index (e.g., PICC_APP_OTA).
+ * @param[in]  methodId     The specific Method ID M-Core is looking for.
+ * @param[out] data         Buffer to store the raw payload data sent by A-Core.
+ * @param[in]  maxLen       Maximum size of the 'data' buffer provided by M-Core.
+ * @param[out] actualLen    Returns the actual length of the payload data received from A-Core.
+ * @param[out] outSessionId Returns the sessionId from A-Core's REQUEST. M-Core MUST echo this
+ *                          value back via PICC_MethodResponse() for proper request-response matching.
+ *                          Pass NULL if sessionId is not needed (e.g., for FF methods).
+ * @param[out] cbResult     Buffer to store the result produced by the M-Core callback handler (pass NULL if not needed/registered).
+ * @param[out] cbResultLen  Returns the length of the callback result (pass NULL if not needed/registered).
  *
  * @return PICC_E_OK      = New request from A-Core was successfully retrieved.
  *         PICC_E_NO_DATA = No new request from A-Core has arrived yet.
@@ -285,6 +288,7 @@ sint8 PICC_MethodResponse(PICC_AppIndex_e appIndex, uint8 methodId,
  */
 sint8 PICC_GetMethodData(PICC_AppIndex_e appIndex, uint8 methodId,
                          uint8 *data, uint16 maxLen, uint16 *actualLen,
+                         uint8 *outSessionId,
                          uint8 *cbResult, uint16 *cbResultLen);
 
 /**

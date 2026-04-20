@@ -150,7 +150,8 @@ static uint8 PICC_FindAppByRemoteId(uint8 remoteId)
 /**
  * @brief Store data into a slot array (find by msgId, reuse or allocate)
  */
-static void PICC_StoreToSlot(PICC_RxSlot_t *slots, uint8 msgId, uint8 returnCode,
+static void PICC_StoreToSlot(PICC_RxSlot_t *slots, uint8 msgId, uint8 sessionId,
+                              uint8 returnCode,
                               const uint8 *payload, uint16 payloadLen,
                               uint8 *victimIdx)
 {
@@ -177,7 +178,7 @@ static void PICC_StoreToSlot(PICC_RxSlot_t *slots, uint8 msgId, uint8 returnCode
 
     copyLen = (payloadLen > PICC_RX_MAX_DATA_LEN) ? PICC_RX_MAX_DATA_LEN : payloadLen;
     slots[freeSlot].msgId = msgId;
-    slots[freeSlot].sessionId = 0U;    /* Default: no session (Method/Event use msgId only) */
+    slots[freeSlot].sessionId = sessionId;
     slots[freeSlot].returnCode = returnCode;
     for (s = 0U; s < copyLen; s++) {
         slots[freeSlot].data[s] = payload[s];
@@ -249,6 +250,7 @@ static void PICC_StoreResponseToSlot(PICC_RxSlot_t *slots, uint8 msgId,
  */
 static sint8 PICC_ReadFromSlot(PICC_RxSlot_t *slots, uint8 msgId,
                                 uint8 filterSessionId, uint8 *returnCode,
+                                uint8 *outSessionId,
                                 uint8 *data, uint16 maxLen, uint16 *actualLen,
                                 uint8 *cbResult, uint16 *cbResultLen)
 {
@@ -264,6 +266,10 @@ static sint8 PICC_ReadFromSlot(PICC_RxSlot_t *slots, uint8 msgId,
             /* Found matching slot with new data */
             if (returnCode != NULL) {
                 *returnCode = slots[s].returnCode;
+            }
+            /* Output the stored sessionId (for polling-mode PICC_MethodResponse echo) */
+            if (outSessionId != NULL) {
+                *outSessionId = slots[s].sessionId;
             }
             copyLen = (slots[s].dataLen > maxLen) ? maxLen : slots[s].dataLen;
             copyLen = (copyLen > PICC_RX_MAX_DATA_LEN) ? PICC_RX_MAX_DATA_LEN : copyLen;
@@ -382,7 +388,8 @@ void PICC_StoreToMailbox(const PICC_MsgHeader_t *header,
             appIdx = PICC_FindAppByLocalId(header->providerId);
             if (appIdx < (uint8)PICC_APP_MAX) {
                 PICC_StoreToSlot(g_rxMailbox[appIdx].method,
-                                 header->methodId, 0U, payload, payloadLen,
+                                 header->methodId, header->sessionId,
+                                 0U, payload, payloadLen,
                                  &g_rxMailbox[appIdx].methodVictim);
             }
             break;
@@ -411,7 +418,8 @@ void PICC_StoreToMailbox(const PICC_MsgHeader_t *header,
             }
             if (appIdx < (uint8)PICC_APP_MAX) {
                 PICC_StoreToSlot(g_rxMailbox[appIdx].event,
-                                 header->methodId, 0U, payload, payloadLen,
+                                 header->methodId, 0U,
+                                 0U, payload, payloadLen,
                                  &g_rxMailbox[appIdx].eventVictim);
             }
             break;
@@ -488,6 +496,7 @@ void PICC_StoreCallbackResult(const PICC_MsgHeader_t *header,
 
 sint8 PICC_MailboxGetMethodData(PICC_AppIndex_e appIndex, uint8 methodId,
                                 uint8 *data, uint16 maxLen, uint16 *actualLen,
+                                uint8 *outSessionId,
                                 uint8 *cbResult, uint16 *cbResultLen)
 {
     if ((uint8)appIndex >= (uint8)PICC_APP_MAX) {
@@ -497,7 +506,8 @@ sint8 PICC_MailboxGetMethodData(PICC_AppIndex_e appIndex, uint8 methodId,
         return PICC_E_PARAM;
     }
     return PICC_ReadFromSlot(g_rxMailbox[(uint8)appIndex].method,
-                             methodId, 0U, NULL, data, maxLen, actualLen,
+                             methodId, 0U, NULL, outSessionId,
+                             data, maxLen, actualLen,
                              cbResult, cbResultLen);
 }
 
@@ -513,7 +523,8 @@ sint8 PICC_MailboxGetResponseData(PICC_AppIndex_e appIndex, uint8 methodId,
         return PICC_E_PARAM;
     }
     return PICC_ReadFromSlot(g_rxMailbox[(uint8)appIndex].response,
-                             methodId, sessionId, returnCode, data, maxLen, actualLen,
+                             methodId, sessionId, returnCode, NULL,
+                             data, maxLen, actualLen,
                              cbResult, cbResultLen);
 }
 
@@ -528,7 +539,8 @@ sint8 PICC_MailboxGetEventData(PICC_AppIndex_e appIndex, uint8 eventId,
         return PICC_E_PARAM;
     }
     return PICC_ReadFromSlot(g_rxMailbox[(uint8)appIndex].event,
-                             eventId, 0U, NULL, data, maxLen, actualLen,
+                             eventId, 0U, NULL, NULL,
+                             data, maxLen, actualLen,
                              cbResult, cbResultLen);
 }
 

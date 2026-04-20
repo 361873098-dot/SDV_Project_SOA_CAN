@@ -146,7 +146,7 @@ extern volatile uint8 Test_input;
  *
  * Must be called after PICC_PreOS_Init() and before the scheduler starts.
  */
-void DiagMgmt_Init(void);
+//void DiagMgmt_Init(void);
 
 /**
  * @brief Diagnostic Management 10ms periodic main function
@@ -164,7 +164,11 @@ void DiagMgmt_Init(void);
  *   1. M-Core cannot synchronously wait for ACK (real-time constraints).
  *   2. Per IPCF protocol: M-Core ignores EVENT_ACK even if configured.
  */
-void DiagMgmt_Main(void);
+//void DiagMgmt_Main(void);
+
+
+//	void Hm_Init(void);
+
 
 #if defined(__cplusplus)
 }

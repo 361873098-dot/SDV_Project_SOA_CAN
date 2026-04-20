@@ -216,7 +216,7 @@ sint8 PICC_MethodResponse(PICC_AppIndex_e appIndex, uint8 methodId,
         return PICC_E_PARAM;
     }
 
-    return PICC_ServiceResponseSend(cfg->remoteId, methodId, sessionId,
+    return PICC_ServiceResponseSend(cfg->localId, cfg->remoteId, methodId, sessionId,
                                     returnCode, data, len, IPCF_INSTANCE0, cfg->channelId);
 }
 
@@ -246,10 +246,11 @@ sint8 PICC_MethodResponse(PICC_AppIndex_e appIndex, uint8 methodId,
  */
 sint8 PICC_GetMethodData(PICC_AppIndex_e appIndex, uint8 methodId,
                          uint8 *data, uint16 maxLen, uint16 *actualLen,
+                         uint8 *outSessionId,
                          uint8 *cbResult, uint16 *cbResultLen)
 {
     return PICC_MailboxGetMethodData(appIndex, methodId, data, maxLen, actualLen,
-                                     cbResult, cbResultLen);
+                                     outSessionId, cbResult, cbResultLen);
 }
 
 /**
