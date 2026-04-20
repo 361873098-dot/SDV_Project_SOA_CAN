@@ -88,7 +88,7 @@ static const Flexcan_Ip_DataInfoType g_rxDataInfo = {.msg_id_type =
 static const uint32 g_txMsgId[2] = {AINFC_TX_MSG_ID_0, AINFC_TX_MSG_ID_1};
 
 /** RX CAN ID lookup table (indexed by RX channel: 0->MB2, 1->MB3) */
-static const uint32 g_rxMsgId[2] = {AINFC_RX_MSG_ID_0, AINFC_RX_MSG_ID_1};
+static const uint32 g_rxMsgId[2] __attribute__((unused)) = {AINFC_RX_MSG_ID_0, AINFC_RX_MSG_ID_1};
 
 /*==================================================================================================
  *                                         PUBLIC FUNCTIONS

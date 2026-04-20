@@ -184,12 +184,24 @@ def is_tx(msg, node: str) -> bool:
 
 
 def is_rx(msg, node: str) -> bool:
-    """Message is RX when the given node appears in any signal's receivers."""
+    """Message is RX when the given node appears in any signal's receivers.
+
+    Also treats 'Vector__XXX' as a wildcard meaning 'all nodes', which is
+    the standard DBC convention.  Additionally, any message whose sender is
+    NOT our target node is considered a candidate RX message (the target node
+    must be receiving it if it is defined in the DBC and not sending it).
+    """
     if node is None:
         return True
     for sig in msg.signals:
         if node in sig.receivers:
             return True
+        # Vector__XXX is the DBC wildcard — treat as "every node receives this"
+        if "Vector__XXX" in sig.receivers:
+            return True
+    # Fallback: if this node is NOT the sender, assume it is a receiver
+    if not is_tx(msg, node):
+        return True
     return False
 
 
