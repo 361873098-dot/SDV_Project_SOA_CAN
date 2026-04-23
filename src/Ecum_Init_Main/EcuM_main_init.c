@@ -44,6 +44,7 @@ extern "C" {
 #include "TJA1145A_Spi_Baremetal.h"
 #include "picc_main.h"
 #include "pwsm.h"
+#include "soa_adapter.h"
 #include "diag_mgmt.h"
 
 /* FreeRTOS headers */
@@ -76,6 +77,7 @@ static void App_Init_All(void)
 {
   /* Register application-level PICC endpoints after middleware is ready. */
   Pwsm_Init();
+  SoaAdapter_Init();
   //DiagMgmt_Init();
   Hm_Init();
   //OTA_Init();

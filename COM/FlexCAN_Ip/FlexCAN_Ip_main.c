@@ -54,10 +54,10 @@ volatile uint32 g_canRxCount2 = 0;
  *==================================================================================================*/
 
 /** TX data buffers for 2 TX channels */
-static uint8 g_txData0[8] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
+//static uint8 g_txData0[8] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
 static uint8 g_txData1[8] = {0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18};
 
-static uint8 g_RxData0[8] = {0};
+//static uint8 g_RxData0[8] = {0};
 static uint8 g_RxData1[8] = {0};
 
 /** RX message buffer structures for 2 RX channels */
@@ -237,26 +237,58 @@ unsigned char AINFC_Can_RxMsgL(unsigned char Bus_ID, unsigned char Mbx,
 }
 
 /**
+ * @brief Unpacks and receives a Standard_200 CAN message from specified MB.
+ */
+
+
+
+void FlexCAN_Message_Rx_200_unpack(uint8 Bus_ID,uint8 Mbx,uint8 DCL,Standard_200_Rx_t *msgRx)
+{
+    uint8 rxStatus;
+
+	uint8 msg_frame[8];
+
+    rxStatus = AINFC_Can_RxMsgL(Bus_ID, Mbx, msg_frame);
+	if (rxStatus == AINFC_CAN_OK)
+	{
+		Standard_200_Rx_unpack(msgRx, msg_frame, DCL);
+
+	}
+}
+
+
+/**
+ * @brief Packs and sends a Standard_100 CAN message via specified MB
+ */
+
+
+void FlexCAN_Message_Tx_100_pack(uint8 Bus_ID,uint8 Mbx,uint8 DCL,Standard_100_Tx_t *TxData)
+{
+
+	uint8 TxMSG[8];
+
+	Standard_100_Tx_pack(TxMSG, TxData, DCL);
+
+	(void)AINFC_Can_TxMsg(Bus_ID, Mbx, TxMSG);
+
+
+}
+
+
+
+/**
  * @brief 10ms periodic CAN processing
  *
  * Handles 2 TX and 2 RX message cyclic processing.
  */
 void AINFC_Can_Cyclic_10ms(void) {
-  unsigned char rxStatus;
 
   /* ====================================================================
    * RX Processing - poll both RX MBs
    * ==================================================================== */
 
-  /* RX MB0 (ID=0x200, DBC: Standard_200_Rx) */
-  rxStatus = AINFC_Can_RxMsgL(0U, AINFC_RX_MB0, g_RxData0);
-  if (rxStatus == AINFC_CAN_OK) {
-    /* Unpack raw bytes → DBC struct */
-    Standard_200_Rx_unpack(&g_rx_Standard_200_Rx, g_RxData0, STANDARD_200_RX_DLC);
-    /* Application can now read:
-     *   g_rx_Standard_200_Rx.Test_ID_0x200
-     */
-  }
+  (void)FlexCAN_Message_Rx_200_unpack(0,AINFC_RX_MB0,STANDARD_200_RX_DLC,&g_rx_Standard_200_Rx);
+  
 
   /* RX MB1 (ID=0x201) — no DBC mapping */
   (void)AINFC_Can_RxMsgL(0U, AINFC_RX_MB1, g_RxData1);
@@ -271,8 +303,14 @@ void AINFC_Can_Cyclic_10ms(void) {
    *   g_tx_Standard_100_Tx.Vehicle_Speed = 120.5f;
    *   g_tx_Standard_100_Tx.KL15_Status   = 1u;
    */
-  Standard_100_Tx_pack(g_txData0, &g_tx_Standard_100_Tx, STANDARD_100_TX_DLC);
-  (void)AINFC_Can_TxMsg(0U, AINFC_TX_MB0, g_txData0);
+  //Standard_100_Tx_pack(g_txData0, &g_tx_Standard_100_Tx, STANDARD_100_TX_DLC);
+  //(void)AINFC_Can_TxMsg(0U, AINFC_TX_MB0, g_txData0);
+
+  FlexCAN_Message_Tx_100_pack(0,AINFC_TX_MB0,STANDARD_100_TX_DLC,&g_tx_Standard_100_Tx);
+
+
+
+  
 
   /* TX MB1 (ID=0x101) — no DBC mapping */
   g_txData1[0] = (uint8)(g_canTxCount2 & 0xFFU);

@@ -11,7 +11,7 @@ trigger: always_on
 当前的通道仅支持 ipfc 通道，也就是代码中所配置的 ipcf_shm_cfg_channels0，表示的是 ipcf 通道，所使用的 instances 为 1，即表示只有 1 个通道，也就是 IPCF 通道，这个 instances 对应于 PICC_ProcessRxData （）中的 instance；这个 ipcf 的通道中有配置两个 ipcf channel，即 ipcf_shm_cfg_channels0 这个数组中的 index =1 和 index=2 分别对应 PICC_ProcessRxData（）中的形参 chan_id；
 由于 M 核心的实时性，无法进行同步等待，所以：
 1 M 核发送 Request 之后，需要使用异步的方式去获取 A 核返回 RESPONSE 消息中的 seesion id 进行匹配从而对获取信息；
-2 M 核发送 EVENT 的时候，只需要发不带 ACK 的 EVENT，如果应用层需要 M 核发带 ACK 的 EVENT，那么 M 核对这个 EVENT 的 ACK 不做处理；
+2 M 核发送 EVENT 的时候，只需要发不带 ACK 的 EVENT，如果应用层需要 A 核发带 ACK 的 EVENT，那么 M 核对这个 EVENT 的 ACK 不做处理；
 
 你检查当前整个代码，不要修改 configTOTAL_HEAP_SIZE 这个大小的情况，去修改 SAMPLE_TASK_STACK_SIZE 的大小，payload 大小虽然是两个字节的大小，但是实际情况也不会有两字节这么大的 palyload，所以我希望你能合理配置 SAMPLE_TASK_STACK_SIZE，从而避免出现程序崩溃的问题
 

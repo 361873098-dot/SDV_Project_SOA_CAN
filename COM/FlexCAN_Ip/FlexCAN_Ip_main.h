@@ -113,12 +113,49 @@ unsigned char AINFC_Can_TxMsg(unsigned char Bus_ID, unsigned char Mbx,
 unsigned char AINFC_Can_RxMsgL(unsigned char Bus_ID, unsigned char Mbx,
                                unsigned char *msg_frame);
 
+
+
+
+/**
+ * @brief Unpacks and receives a Standard_200 CAN message from specified MB.
+ *
+ * This function polls the specified message buffer (MB) for a new Standard_200
+ * CAN message. If a message is successfully received, it unpacks the raw data
+ * into the provided structure pointed to by \c msgRx using DBC-generated functions.
+ *
+ * @param[in]  Bus_ID The FlexCAN instance number (e.g., 0 for CAN0).
+ * @param[in]  Mbx    The RX Message Buffer index (e.g., AINFC_RX_MB0).
+ * @param[in]  DCL    The Data Length Code for the expected message.
+ * @param[out] msgRx  Pointer to a \c Standard_200_Rx_t structure to store
+ *                    the unpacked signal values.
+ */
+
+void FlexCAN_Message_Rx_200_unpack(uint8 Bus_ID,uint8 Mbx,uint8 DCL,Standard_200_Rx_t *msgRx);
+
+/**
+ * @brief Packs and sends a Standard_100 CAN message via specified MB.
+ *
+ * This function takes the signal values contained in the \c TxData structure,
+ * packs them into an 8-byte CAN frame using DBC-generated functions, and
+ * initiates transmission via the specified message buffer (MB).
+ *
+ * @param[in] Bus_ID  The FlexCAN instance number (e.g., 0 for CAN0).
+ * @param[in] Mbx     The TX Message Buffer index (e.g., AINFC_TX_MB0).
+ * @param[in] DCL     The Data Length Code for the message to be sent.
+ * @param[in] TxData  Pointer to a \c Standard_100_Tx_t structure containing
+ *                    the signal values to be packed and transmitted.
+ */
+
+
+void FlexCAN_Message_Tx_100_pack(uint8 Bus_ID,uint8 Mbx,uint8 DCL,Standard_100_Tx_t *TxData);
+
 /**
  * @brief 10ms periodic CAN processing (Runnable)
  *
  * Handles 2 TX and 2 RX message cyclic processing.
  * Called from TASK_M0_10MS() in Ostask_main.c.
  */
+
 void AINFC_Can_Cyclic_10ms(void);
 
 #ifdef __cplusplus

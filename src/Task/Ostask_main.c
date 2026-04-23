@@ -39,7 +39,8 @@ extern "C"{
 #include "Ostask_main.h"
 
 /* Application module headers - for periodic Runnables */
-#include "FlexCAN_Ip_main.h"        /* AINFC_Can_Cyclic_10ms()                  */
+#include "FlexCAN_Ip_main.h"        /* FlexCAN_Process_Init()                   */
+#include "soa_adapter.h"             /* SoaAdapter_Main()                        */
 #include "TJA1145A_Spi_Baremetal.h"  /* Spi_Baremetal_Tja1145_PeriodicTest()     */
 #include "picc_stack.h"              /* PICC_StackProcess()                      */
 #include "picc_heartbeat.h"          /* PICC_HeartbeatProcess()                  */

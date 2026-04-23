@@ -34,19 +34,20 @@ NS_ :
 BS_:
 
 BU_: SDV_Tester SDV_M_CORE0
-VAL_TABLE_ Gear_state 4 "Invalid" 3 "D" 2 "N" 1 "R" 0 "P" ;
-VAL_TABLE_ powerState 23 "PWSM_STATE_MSG_SHUTDOWN_DONE" 22 "PWSM_MSG_STATE_NO_RESPONSE" 21 "PWSM_STATE_MSG_RX_ID11" 20 "PWSM_STATE_MSG_TX_ID4" 19 "PWSM_STATE_MSG_RX_ID8" 18 "PWSM_STATE_MSG_RX_ID2" 17 "PWSM_STATE_MSG_TX_ID1" 0 "PWSM_MSG_STATE_IDLE" ;
-VAL_TABLE_ Exit_Request_stauts 1 "Quit request" 0 "No Quit request" ;
-VAL_TABLE_ KST_KL_15 1 "KL15 ON" 0 "KL15 OFF" ;
+VAL_TABLE_ Vehicle_mode 2 "OTA" 1 "OBD" 0 "Normal" ;
+VAL_TABLE_ IGN_ST 1 "ON" 0 "OFF" ;
+VAL_TABLE_ Gear_state 7 "Invalid" 6 "Invalid" 5 "Invalid" 4 "Invalid" 3 "R" 2 "S" 1 "N" 0 "P" ;
 
 
-BO_ 512 Standard_200_Rx: 6 SDV_Tester
- SG_ Battery : 15|8@0+ (1,0) [0|100] "%" Vector__XXX
- SG_ Gear : 7|8@0+ (1,0) [0|4] "" Vector__XXX
- SG_ Vehicle_Speed : 23|16@0- (0.01,0) [-327.68|327.67] "km/h" Vector__XXX
+BO_ 512 Standard_200_Rx: 8 SDV_Tester
+ SG_ VehicleSpeed : 39|16@0+ (1,0) [0|400] "km/h" Vector__XXX
+ SG_ WorkVehicleModeSt : 15|8@0+ (1,0) [0|2] "" Vector__XXX
+ SG_ ParkingSts : 7|8@0+ (1,0) [0|4] "" Vector__XXX
+ SG_ HighVoltageBatterySts : 23|16@0+ (0.01,0) [0|100] "%" Vector__XXX
 
-BO_ 256 Standard_100_Tx: 1 SDV_M_CORE0
- SG_ Power_Msgstate : 7|8@0+ (1,0) [0|1] "" Vector__XXX
+BO_ 256 Standard_100_Tx: 2 SDV_M_CORE0
+ SG_ VehicleMode : 15|8@0+ (1,0) [0|2] "" Vector__XXX
+ SG_ IgnitionSts : 7|8@0+ (1,0) [0|1] "" Vector__XXX
 
 
 
@@ -60,10 +61,12 @@ BA_DEF_DEF_  "GenMsgSendType" "Cycle";
 BA_DEF_DEF_  "GenMsgCycleTime" 100;
 BA_DEF_DEF_  "GenSigSendType" "Cycle";
 BA_DEF_DEF_  "BusType" "CAN";
-BA_ "GenMsgCycleTime" BO_ 512 100;
 BA_ "GenMsgSendType" BO_ 512 0;
-BA_ "GenMsgCycleTime" BO_ 256 100;
+BA_ "GenMsgCycleTime" BO_ 512 100;
 BA_ "GenMsgSendType" BO_ 256 0;
-VAL_ 512 Gear 4 "Invalid" 3 "D" 2 "N" 1 "R" 0 "P" ;
-VAL_ 256 Power_Msgstate 23 "PWSM_STATE_MSG_SHUTDOWN_DONE" 22 "PWSM_MSG_STATE_NO_RESPONSE" 21 "PWSM_STATE_MSG_RX_ID11" 20 "PWSM_STATE_MSG_TX_ID4" 19 "PWSM_STATE_MSG_RX_ID8" 18 "PWSM_STATE_MSG_RX_ID2" 17 "PWSM_STATE_MSG_TX_ID1" 0 "PWSM_MSG_STATE_IDLE" ;
+BA_ "GenMsgCycleTime" BO_ 256 100;
+VAL_ 512 WorkVehicleModeSt 2 "OTA" 1 "OBD" 0 "Normal" ;
+VAL_ 512 ParkingSts 4 "Invalid" 3 "R" 2 "S" 1 "N" 0 "P" ;
+VAL_ 256 VehicleMode 2 "OTA" 1 "OBD" 0 "Normal" ;
+VAL_ 256 IgnitionSts 1 "ON" 0 "OFF" ;
 
