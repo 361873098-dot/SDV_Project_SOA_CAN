@@ -88,7 +88,92 @@ static const Flexcan_Ip_DataInfoType g_rxDataInfo = {.msg_id_type =
 static const uint32 g_txMsgId[2] = {AINFC_TX_MSG_ID_0, AINFC_TX_MSG_ID_1};
 
 /** RX CAN ID lookup table (indexed by RX channel: 0->MB2, 1->MB3) */
-static const uint32 g_rxMsgId[2] __attribute__((unused)) = {AINFC_RX_MSG_ID_0, AINFC_RX_MSG_ID_1};
+static const uint32 g_rxMsgId[2] = {AINFC_RX_MSG_ID_0, AINFC_RX_MSG_ID_1};
+
+
+
+
+static unsigned char FlexCAN_GetTxMsgIdByMbx(uint8 Mbx, uint32 *msgId) {
+  if (msgId == (uint32 *)0) {
+    return AINFC_CAN_ERROR;
+  }
+
+  if (Mbx == AINFC_TX_MB0) {
+    *msgId = g_txMsgId[0];
+    return AINFC_CAN_OK;
+  }
+
+  if (Mbx == AINFC_TX_MB1) {
+    *msgId = g_txMsgId[1];
+    return AINFC_CAN_OK;
+  }
+
+  return AINFC_CAN_ERROR;
+}
+
+static unsigned char FlexCAN_GetRxMsgIdByMbx(uint8 Mbx, uint32 *msgId) {
+  if (msgId == (uint32 *)0) {
+    return AINFC_CAN_ERROR;
+  }
+
+  if (Mbx == AINFC_RX_MB0) {
+    *msgId = g_rxMsgId[0];
+    return AINFC_CAN_OK;
+  }
+
+  if (Mbx == AINFC_RX_MB1) {
+    *msgId = g_rxMsgId[1];
+    return AINFC_CAN_OK;
+  }
+
+  return AINFC_CAN_ERROR;
+}
+
+static unsigned char AINFC_Can_TxMsgById(unsigned char Bus_ID, unsigned char Mbx,
+                                         uint32 msgId,
+                                         const unsigned char *msg_frame) {
+  Flexcan_Ip_StatusType status;
+
+  if (msg_frame == (const unsigned char *)0) {
+    return AINFC_CAN_ERROR;
+  }
+
+  if ((Mbx != AINFC_TX_MB0) && (Mbx != AINFC_TX_MB1)) {
+    return AINFC_CAN_ERROR;
+  }
+
+  /* Check if previous TX on this MB completed */
+  if (g_txBusy[Mbx]) {
+    /* Poll for completion */
+    FlexCAN_Ip_MainFunctionWrite((uint8)Bus_ID, Mbx);
+    status = FlexCAN_Ip_GetTransferStatus((uint8)Bus_ID, Mbx);
+    if (status == FLEXCAN_STATUS_SUCCESS) {
+      g_txBusy[Mbx] = FALSE;
+      if (Mbx == AINFC_TX_MB0) {
+        g_canTxCount++;
+      } else {
+        g_canTxCount2++;
+      }
+    } else if (status == FLEXCAN_STATUS_ERROR) {
+      g_txBusy[Mbx] = FALSE;
+    } else {
+      /* Still busy */
+      return AINFC_CAN_BUSY;
+    }
+  }
+
+  /* Send new message */
+  status = FlexCAN_Ip_Send((uint8)Bus_ID, Mbx, &g_txDataInfo, msgId,
+                           (const uint8 *)msg_frame);
+  if (status == FLEXCAN_STATUS_SUCCESS) {
+    g_txBusy[Mbx] = TRUE;
+    return AINFC_CAN_OK;
+  } else if (status == FLEXCAN_STATUS_BUSY) {
+    return AINFC_CAN_BUSY;
+  }
+
+  return AINFC_CAN_ERROR;
+}
 
 /*==================================================================================================
  *                                         PUBLIC FUNCTIONS
@@ -122,51 +207,13 @@ void FlexCAN_Process_Init(void) {
  */
 unsigned char AINFC_Can_TxMsg(unsigned char Bus_ID, unsigned char Mbx,
                               unsigned char *msg_frame) {
-  Flexcan_Ip_StatusType status;
   uint32 msgId;
 
-  /* Determine CAN ID based on MB index */
-  if (Mbx == AINFC_TX_MB0) {
-    msgId = g_txMsgId[0];
-  } else if (Mbx == AINFC_TX_MB1) {
-    msgId = g_txMsgId[1];
-  } else {
+  if (FlexCAN_GetTxMsgIdByMbx(Mbx, &msgId) != AINFC_CAN_OK) {
     return AINFC_CAN_ERROR;
   }
 
-  /* Check if previous TX on this MB completed */
-  if (Mbx < 2U && g_txBusy[Mbx]) {
-    /* Poll for completion */
-    FlexCAN_Ip_MainFunctionWrite((uint8)Bus_ID, Mbx);
-    status = FlexCAN_Ip_GetTransferStatus((uint8)Bus_ID, Mbx);
-    if (status == FLEXCAN_STATUS_SUCCESS) {
-      g_txBusy[Mbx] = FALSE;
-      if (Mbx == AINFC_TX_MB0) {
-        g_canTxCount++;
-      } else {
-        g_canTxCount2++;
-      }
-    } else if (status == FLEXCAN_STATUS_ERROR) {
-      g_txBusy[Mbx] = FALSE;
-    } else {
-      /* Still busy */
-      return AINFC_CAN_BUSY;
-    }
-  }
-
-  /* Send new message */
-  status = FlexCAN_Ip_Send((uint8)Bus_ID, Mbx, &g_txDataInfo, msgId,
-                           (const uint8 *)msg_frame);
-  if (status == FLEXCAN_STATUS_SUCCESS) {
-    if (Mbx < 2U) {
-      g_txBusy[Mbx] = TRUE;
-    }
-    return AINFC_CAN_OK;
-  } else if (status == FLEXCAN_STATUS_BUSY) {
-    return AINFC_CAN_BUSY;
-  }
-
-  return AINFC_CAN_ERROR;
+  return AINFC_Can_TxMsgById(Bus_ID, Mbx, msgId, msg_frame);
 }
 
 /**
@@ -236,43 +283,57 @@ unsigned char AINFC_Can_RxMsgL(unsigned char Bus_ID, unsigned char Mbx,
   return AINFC_CAN_NO_MSG;
 }
 
-/**
- * @brief Unpacks and receives a Standard_200 CAN message from specified MB.
- */
+unsigned char FlexCAN_Message_Rx_unpack(uint8 Bus_ID, uint8 Mbx, uint32 MsgId,
+                                        void *msgRx) {
+  uint8 rxStatus;
+  uint8 msg_frame[8] = {0U};
+  uint32 configuredMsgId;
 
+  if (msgRx == (void *)0) {
+    return AINFC_CAN_ERROR;
+  }
 
+  if (FlexCAN_GetRxMsgIdByMbx(Mbx, &configuredMsgId) != AINFC_CAN_OK) {
+    return AINFC_CAN_ERROR;
+  }
 
-void FlexCAN_Message_Rx_200_unpack(uint8 Bus_ID,uint8 Mbx,uint8 DCL,Standard_200_Rx_t *msgRx)
-{
-    uint8 rxStatus;
+  if (configuredMsgId != MsgId) {
+    return AINFC_CAN_ERROR;
+  }
 
-	uint8 msg_frame[8];
+  rxStatus = AINFC_Can_RxMsgL(Bus_ID, Mbx, msg_frame);
+  if (rxStatus != AINFC_CAN_OK) {
+    return rxStatus;
+  }
 
-    rxStatus = AINFC_Can_RxMsgL(Bus_ID, Mbx, msg_frame);
-	if (rxStatus == AINFC_CAN_OK)
-	{
-		Standard_200_Rx_unpack(msgRx, msg_frame, DCL);
+  /* Delegate to auto-generated unified unpack */
+  if (Standard_Rx_unpack((uint32_t)MsgId, msgRx,
+                          (const uint8_t *)msg_frame, (uint8_t)8U) != 0) {
+    return AINFC_CAN_ERROR;
+  }
 
-	}
+  return AINFC_CAN_OK;
 }
 
 
-/**
- * @brief Packs and sends a Standard_100 CAN message via specified MB
- */
 
+unsigned char FlexCAN_Message_Tx_pack(uint8 Bus_ID, uint8 Mbx, uint32 MsgId,
+                                      const void *TxData) {
+  uint8 txMsg[8] = {0U};
 
-void FlexCAN_Message_Tx_100_pack(uint8 Bus_ID,uint8 Mbx,uint8 DCL,Standard_100_Tx_t *TxData)
-{
+  if (TxData == (const void *)0) {
+    return AINFC_CAN_ERROR;
+  }
 
-	uint8 TxMSG[8];
+  /* Delegate to auto-generated unified pack */
+  if (Standard_Tx_pack((uint32_t)MsgId, (uint8_t *)txMsg,
+                        TxData, (uint8_t)8U) != 0) {
+    return AINFC_CAN_ERROR;
+  }
 
-	Standard_100_Tx_pack(TxMSG, TxData, DCL);
-
-	(void)AINFC_Can_TxMsg(Bus_ID, Mbx, TxMSG);
-
-
+  return AINFC_Can_TxMsgById(Bus_ID, Mbx, MsgId, txMsg);
 }
+
 
 
 
@@ -287,7 +348,8 @@ void AINFC_Can_Cyclic_10ms(void) {
    * RX Processing - poll both RX MBs
    * ==================================================================== */
 
-  (void)FlexCAN_Message_Rx_200_unpack(0,AINFC_RX_MB0,STANDARD_200_RX_DLC,&g_rx_Standard_200_Rx);
+  (void)FlexCAN_Message_Rx_unpack(0U, AINFC_RX_MB0, STANDARD_200_RX_ID,
+                                  &g_rx_Standard_200_Rx);
   
 
   /* RX MB1 (ID=0x201) — no DBC mapping */
@@ -300,13 +362,14 @@ void AINFC_Can_Cyclic_10ms(void) {
   /* TX MB0 (ID=0x100, DBC: Standard_100_Tx)
    * Application layer sets physical values in g_tx_Standard_100_Tx
    * before this function is called, e.g.:
-   *   g_tx_Standard_100_Tx.Vehicle_Speed = 120.5f;
-   *   g_tx_Standard_100_Tx.KL15_Status   = 1u;
+   *   g_tx_Standard_100_Tx.IgnitionSts = 1u;
+   *   g_tx_Standard_100_Tx.VehicleMode = 0u;
    */
   //Standard_100_Tx_pack(g_txData0, &g_tx_Standard_100_Tx, STANDARD_100_TX_DLC);
   //(void)AINFC_Can_TxMsg(0U, AINFC_TX_MB0, g_txData0);
 
-  FlexCAN_Message_Tx_100_pack(0,AINFC_TX_MB0,STANDARD_100_TX_DLC,&g_tx_Standard_100_Tx);
+  (void)FlexCAN_Message_Tx_pack(0U, AINFC_TX_MB0, STANDARD_100_TX_ID,
+                                &g_tx_Standard_100_Tx);
 
 
 

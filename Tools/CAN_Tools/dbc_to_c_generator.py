@@ -291,17 +291,63 @@ def generate_header(db, basename: str, node: str) -> str:
         lines.append(f"}} {msg.name}_t;")
         lines.append(f"")
 
-        # Function prototypes — only needed directions
-        if msg_is_tx:
-            lines.append(
-                f"int {msg.name}_pack(uint8_t *data, const {msg.name}_t *msg, uint8_t dlc);"
-            )
-        if msg_is_rx:
-            lines.append(
-                f"int {msg.name}_unpack({msg.name}_t *msg, const uint8_t *data, uint8_t dlc);"
-            )
-        lines.append(f"")
-    # Global struct instance extern declarations
+    # ---------------------------------------------------------------
+    #  Dispatch table type + unified API declarations
+    # ---------------------------------------------------------------
+    lines.append(f"/* " + "=" * 70 + " */")
+    lines.append(f"/*  DBC dispatch table & unified pack/unpack API                        */")
+    lines.append(f"/* " + "=" * 70 + " */")
+    lines.append(f"")
+    lines.append(f"/** Function-pointer types used by the dispatch table */")
+    lines.append(f"typedef int (*Dbc_PackFuncType)(uint8_t *data, const void *msg, uint8_t dlc);")
+    lines.append(f"typedef int (*Dbc_UnpackFuncType)(void *msg, const uint8_t *data, uint8_t dlc);")
+    lines.append(f"")
+    lines.append(f"/** One entry in the auto-generated DBC dispatch table */")
+    lines.append(f"typedef struct {{")
+    lines.append(f"    uint32_t  msgId;    /**< CAN message ID */")
+    lines.append(f"    uint8_t   dlc;      /**< Message DLC */")
+    lines.append(f"    Dbc_PackFuncType   pack;    /**< NULL if RX-only */")
+    lines.append(f"    Dbc_UnpackFuncType unpack;  /**< NULL if TX-only */")
+    lines.append(f"}} Dbc_MessageHandlerType;")
+    lines.append(f"")
+
+    # Count TX / RX messages
+    tx_msgs = [m for m in db.messages if is_tx(m, node)]
+    rx_msgs = [m for m in db.messages if is_rx(m, node)]
+    table_count = len(set(m.frame_id for m in tx_msgs + rx_msgs))
+
+    lines.append(f"/** Number of entries in the dispatch table */")
+    lines.append(f"#define DBC_MESSAGE_TABLE_COUNT  ({table_count}U)")
+    lines.append(f"")
+    lines.append(f"/** Auto-generated dispatch table (defined in {basename}.c) */")
+    lines.append(f"extern const Dbc_MessageHandlerType g_dbcMessageTable[DBC_MESSAGE_TABLE_COUNT];")
+    lines.append(f"")
+    lines.append(f"/**")
+    lines.append(f" * @brief Unified TX pack function — dispatches by CAN_ID")
+    lines.append(f" *")
+    lines.append(f" * @param[in]  CAN_ID  CAN message ID (e.g. 0x100U)")
+    lines.append(f" * @param[out] data    Raw CAN data bytes (caller-allocated)")
+    lines.append(f" * @param[in]  msg     Pointer to the typed DBC struct")
+    lines.append(f" * @param[in]  dlc     Data length code")
+    lines.append(f" * @return  0 on success, -1 on error")
+    lines.append(f" */")
+    lines.append(f"int Standard_Tx_pack(uint32_t CAN_ID, uint8_t *data, const void *msg, uint8_t dlc);")
+    lines.append(f"")
+    lines.append(f"/**")
+    lines.append(f" * @brief Unified RX unpack function — dispatches by CAN_ID")
+    lines.append(f" *")
+    lines.append(f" * @param[in]  CAN_ID  CAN message ID (e.g. 0x200U)")
+    lines.append(f" * @param[out] msg     Pointer to the typed DBC struct")
+    lines.append(f" * @param[in]  data    Raw CAN data bytes")
+    lines.append(f" * @param[in]  dlc     Data length code")
+    lines.append(f" * @return  0 on success, -1 on error")
+    lines.append(f" */")
+    lines.append(f"int Standard_Rx_unpack(uint32_t CAN_ID, void *msg, const uint8_t *data, uint8_t dlc);")
+    lines.append(f"")
+
+    # ---------------------------------------------------------------
+    #  Global struct instance extern declarations
+    # ---------------------------------------------------------------
     lines.append(f"/* " + "=" * 70 + " */")
     lines.append(f"/*  Global message struct instances                                     */")
     lines.append(f"/* " + "=" * 70 + " */")
@@ -550,21 +596,151 @@ def generate_source(db, basename: str, node: str) -> str:
             lines.append(f"{msg.name}_t g_rx_{msg.name} = {{0}};")
     lines.append(f"")
 
+    # ------------------------------------------------------------------
+    # Per-message pack/unpack (static — internal use only)
+    # ------------------------------------------------------------------
+    lines.append(f"/* " + "=" * 70 + " */")
+    lines.append(f"/*  Per-message pack/unpack (static helpers)                            */")
+    lines.append(f"/* " + "=" * 70 + " */")
+    lines.append(f"")
+
     for msg in sorted(db.messages, key=lambda m: m.frame_id):
         msg_is_tx = is_tx(msg, node)
         msg_is_rx = is_rx(msg, node)
         if not (msg_is_tx or msg_is_rx):
             continue
 
-        # TX message: generate pack only
+        # TX message: generate static pack
         if msg_is_tx:
-            lines.extend(_gen_pack(msg))
+            pack_lines = _gen_pack(msg)
+            # Prepend "static " to the function signature line
+            pack_lines[0] = "static " + pack_lines[0]
+            lines.extend(pack_lines)
             lines.append(f"")
 
-        # RX message: generate unpack only
+        # RX message: generate static unpack
         if msg_is_rx:
-            lines.extend(_gen_unpack(msg))
+            unpack_lines = _gen_unpack(msg)
+            unpack_lines[0] = "static " + unpack_lines[0]
+            lines.extend(unpack_lines)
             lines.append(f"")
+
+    # ------------------------------------------------------------------
+    # Adapter wrappers (void* -> typed pointer cast)
+    # ------------------------------------------------------------------
+    lines.append(f"/* " + "=" * 70 + " */")
+    lines.append(f"/*  Adapter wrappers (void* interface for dispatch table)               */")
+    lines.append(f"/* " + "=" * 70 + " */")
+    lines.append(f"")
+
+    for msg in sorted(db.messages, key=lambda m: m.frame_id):
+        msg_is_tx = is_tx(msg, node)
+        msg_is_rx = is_rx(msg, node)
+        if not (msg_is_tx or msg_is_rx):
+            continue
+
+        if msg_is_tx:
+            adapter_name = f"Dbc_{msg.name}_PackAdapter"
+            lines.append(f"static int {adapter_name}(uint8_t *data, const void *msg, uint8_t dlc)")
+            lines.append(f"{{")
+            lines.append(f"    return {msg.name}_pack(data, (const {msg.name}_t *)msg, dlc);")
+            lines.append(f"}}")
+            lines.append(f"")
+
+        if msg_is_rx:
+            adapter_name = f"Dbc_{msg.name}_UnpackAdapter"
+            lines.append(f"static int {adapter_name}(void *msg, const uint8_t *data, uint8_t dlc)")
+            lines.append(f"{{")
+            lines.append(f"    return {msg.name}_unpack(({msg.name}_t *)msg, data, dlc);")
+            lines.append(f"}}")
+            lines.append(f"")
+
+    # ------------------------------------------------------------------
+    # Dispatch table
+    # ------------------------------------------------------------------
+    lines.append(f"/* " + "=" * 70 + " */")
+    lines.append(f"/*  Auto-generated dispatch table                                      */")
+    lines.append(f"/* " + "=" * 70 + " */")
+    lines.append(f"")
+    lines.append(f"const Dbc_MessageHandlerType g_dbcMessageTable[DBC_MESSAGE_TABLE_COUNT] = {{")
+
+    # Collect unique messages (by frame_id) for the table
+    seen_ids = set()
+    table_entries = []
+    for msg in sorted(db.messages, key=lambda m: m.frame_id):
+        if msg.frame_id in seen_ids:
+            continue
+        msg_is_tx = is_tx(msg, node)
+        msg_is_rx = is_rx(msg, node)
+        if not (msg_is_tx or msg_is_rx):
+            continue
+        seen_ids.add(msg.frame_id)
+
+        uname = upper_name(msg.name)
+        pack_fn = f"Dbc_{msg.name}_PackAdapter" if msg_is_tx else "(Dbc_PackFuncType)0"
+        unpack_fn = f"Dbc_{msg.name}_UnpackAdapter" if msg_is_rx else "(Dbc_UnpackFuncType)0"
+
+        table_entries.append(
+            f"    {{ {uname}_ID, {uname}_DLC, {pack_fn}, {unpack_fn} }}"
+        )
+
+    lines.append(",\n".join(table_entries))
+    lines.append(f"}};")
+    lines.append(f"")
+
+    # ------------------------------------------------------------------
+    # Unified dispatch functions
+    # ------------------------------------------------------------------
+    lines.append(f"/* " + "=" * 70 + " */")
+    lines.append(f"/*  Unified dispatch functions                                          */")
+    lines.append(f"/* " + "=" * 70 + " */")
+    lines.append(f"")
+
+    # Standard_Tx_pack
+    lines.append(f"int Standard_Tx_pack(uint32_t CAN_ID, uint8_t *data, const void *msg, uint8_t dlc)")
+    lines.append(f"{{")
+    lines.append(f"    uint32_t idx;")
+    lines.append(f"")
+    lines.append(f"    if ((data == (void *)0) || (msg == (void *)0)) {{ return -1; }}")
+    lines.append(f"")
+    lines.append(f"    for (idx = 0U; idx < DBC_MESSAGE_TABLE_COUNT; idx++)")
+    lines.append(f"    {{")
+    lines.append(f"        if (g_dbcMessageTable[idx].msgId == CAN_ID)")
+    lines.append(f"        {{")
+    lines.append(f"            if (g_dbcMessageTable[idx].pack != (Dbc_PackFuncType)0)")
+    lines.append(f"            {{")
+    lines.append(f"                return g_dbcMessageTable[idx].pack(data, msg, dlc);")
+    lines.append(f"            }}")
+    lines.append(f"            return -1;  /* ID found but no pack function */")
+    lines.append(f"        }}")
+    lines.append(f"    }}")
+    lines.append(f"")
+    lines.append(f"    return -1;  /* CAN_ID not found */")
+    lines.append(f"}}")
+    lines.append(f"")
+
+    # Standard_Rx_unpack
+    lines.append(f"int Standard_Rx_unpack(uint32_t CAN_ID, void *msg, const uint8_t *data, uint8_t dlc)")
+    lines.append(f"{{")
+    lines.append(f"    uint32_t idx;")
+    lines.append(f"")
+    lines.append(f"    if ((data == (void *)0) || (msg == (void *)0)) {{ return -1; }}")
+    lines.append(f"")
+    lines.append(f"    for (idx = 0U; idx < DBC_MESSAGE_TABLE_COUNT; idx++)")
+    lines.append(f"    {{")
+    lines.append(f"        if (g_dbcMessageTable[idx].msgId == CAN_ID)")
+    lines.append(f"        {{")
+    lines.append(f"            if (g_dbcMessageTable[idx].unpack != (Dbc_UnpackFuncType)0)")
+    lines.append(f"            {{")
+    lines.append(f"                return g_dbcMessageTable[idx].unpack(msg, data, dlc);")
+    lines.append(f"            }}")
+    lines.append(f"            return -1;  /* ID found but no unpack function */")
+    lines.append(f"        }}")
+    lines.append(f"    }}")
+    lines.append(f"")
+    lines.append(f"    return -1;  /* CAN_ID not found */")
+    lines.append(f"}}")
+    lines.append(f"")
 
     return "\n".join(lines)
 

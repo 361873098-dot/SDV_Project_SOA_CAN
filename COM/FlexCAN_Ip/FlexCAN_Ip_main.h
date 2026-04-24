@@ -113,41 +113,42 @@ unsigned char AINFC_Can_TxMsg(unsigned char Bus_ID, unsigned char Mbx,
 unsigned char AINFC_Can_RxMsgL(unsigned char Bus_ID, unsigned char Mbx,
                                unsigned char *msg_frame);
 
-
-
+/**
+ * @brief Generic DBC RX dispatcher.
+ *
+ * Polls the specified RX mailbox and unpacks the payload using the
+ * auto-generated Standard_Rx_unpack() dispatch function from CANdbc_file.c.
+ *
+ * @param[in]  Bus_ID FlexCAN instance number.
+ * @param[in]  Mbx    RX Message Buffer index.
+ * @param[in]  MsgId  CAN message ID used to select the DBC unpack function.
+ * @param[out] msgRx  Pointer to the target DBC structure.
+ * @return AINFC_CAN_OK      - RX completed and DBC unpack succeeded
+ * @return AINFC_CAN_NO_MSG  - No new message available
+ * @return AINFC_CAN_ERROR   - Unsupported ID, parameter error, or unpack error
+ */
+unsigned char FlexCAN_Message_Rx_unpack(uint8 Bus_ID, uint8 Mbx, uint32 MsgId,
+                                        void *msgRx);
 
 /**
- * @brief Unpacks and receives a Standard_200 CAN message from specified MB.
+ * @brief Generic DBC TX dispatcher.
  *
- * This function polls the specified message buffer (MB) for a new Standard_200
- * CAN message. If a message is successfully received, it unpacks the raw data
- * into the provided structure pointed to by \c msgRx using DBC-generated functions.
+ * Packs the DBC structure using the auto-generated Standard_Tx_pack()
+ * dispatch function from CANdbc_file.c, then sends through the specified
+ * TX mailbox.
  *
- * @param[in]  Bus_ID The FlexCAN instance number (e.g., 0 for CAN0).
- * @param[in]  Mbx    The RX Message Buffer index (e.g., AINFC_RX_MB0).
- * @param[in]  DCL    The Data Length Code for the expected message.
- * @param[out] msgRx  Pointer to a \c Standard_200_Rx_t structure to store
- *                    the unpacked signal values.
+ * @param[in] Bus_ID FlexCAN instance number.
+ * @param[in] Mbx    TX Message Buffer index.
+ * @param[in] MsgId  CAN message ID used to select the DBC pack function.
+ * @param[in] TxData Pointer to the source DBC structure.
+ * @return AINFC_CAN_OK    - TX started successfully
+ * @return AINFC_CAN_BUSY  - Previous TX on this mailbox is still pending
+ * @return AINFC_CAN_ERROR - Unsupported ID, parameter error, pack error, or TX error
  */
-
-void FlexCAN_Message_Rx_200_unpack(uint8 Bus_ID,uint8 Mbx,uint8 DCL,Standard_200_Rx_t *msgRx);
-
-/**
- * @brief Packs and sends a Standard_100 CAN message via specified MB.
- *
- * This function takes the signal values contained in the \c TxData structure,
- * packs them into an 8-byte CAN frame using DBC-generated functions, and
- * initiates transmission via the specified message buffer (MB).
- *
- * @param[in] Bus_ID  The FlexCAN instance number (e.g., 0 for CAN0).
- * @param[in] Mbx     The TX Message Buffer index (e.g., AINFC_TX_MB0).
- * @param[in] DCL     The Data Length Code for the message to be sent.
- * @param[in] TxData  Pointer to a \c Standard_100_Tx_t structure containing
- *                    the signal values to be packed and transmitted.
- */
+unsigned char FlexCAN_Message_Tx_pack(uint8 Bus_ID, uint8 Mbx, uint32 MsgId,
+                                      const void *TxData);
 
 
-void FlexCAN_Message_Tx_100_pack(uint8 Bus_ID,uint8 Mbx,uint8 DCL,Standard_100_Tx_t *TxData);
 
 /**
  * @brief 10ms periodic CAN processing (Runnable)
