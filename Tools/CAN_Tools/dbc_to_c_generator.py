@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!C:/LegacyApp/python/3.10.0/python.exe
 # -*- coding: utf-8 -*-
 """
 DBC to C Code Generator for Embedded CAN Applications (cantools-based)
@@ -16,13 +16,13 @@ header/source files with:
   - Value description enums
 
 Usage:
-  python dbc_to_c_generator.py <input.dbc> <output_dir> [--node <node_name>]
+    C:/LegacyApp/python/3.10.0/python.exe dbc_to_c_generator.py <input.dbc> <output_dir> [--node <node_name>]
 
 Example (run from Tools/CAN_Tools):
-  python dbc_to_c_generator.py SOA_DBC_File\\CANdbc_file.dbc ..\\..\\Can_tools_generated --node SDV_M_CORE0
+    C:/LegacyApp/python/3.10.0/python.exe dbc_to_c_generator.py SOA_DBC_File/CANdbc_file.dbc D:/My_SandBox/NXP_S32G_Asample/sw-prj-SDV_HPC_BSW_Mcore/IPCF_FreeRTOS_S32G399A_M7_Oring/SWC/Soa_Adapter --node SDV_M_CORE0
 
 Dependencies:
-  pip install cantools
+    C:/LegacyApp/python/3.10.0/python.exe -m pip install cantools
 """
 
 import os
@@ -32,11 +32,45 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 
+REQUIRED_PYTHON_EXE = Path("C:/Users/RogPlus/AppData/Local/Programs/Python/Python312/python.exe")
+
+# =====================================================================
+#  DBC Input File Path Configuration
+#  Specify the absolute path to the input .dbc file here.
+#  If set to None, the script will auto-detect from SOA_DBC_File/ subfolder.
+# =====================================================================
+DEFAULT_DBC_FILE_PATH = Path(
+    r"D:\MySandbox\SDV_Project\IPCF_FreeRTOS_S32G399A_M7_Oring\Tools\CAN_Tools\SOA_DBC_File\CANdbc_file.dbc"
+)
+
+DEFAULT_OUTPUT_DIR = Path(
+    r"D:\My_SandBox\NXP_S32G_Asample\sw-prj-SDV_HPC_BSW_Mcore\IPCF_FreeRTOS_S32G399A_M7_Oring\SWC\Soa_Adapter"
+)
+DEFAULT_OUTPUT_BASENAME = "SOA_CANdbc_Generated"
+
+
+def validate_python_executable() -> None:
+    """Fail fast when the script is not started with the required interpreter."""
+    current_executable = Path(sys.executable).resolve()
+    required_executable = REQUIRED_PYTHON_EXE.resolve()
+    if current_executable != required_executable:
+        print(
+            "ERROR: Unsupported Python interpreter. "
+            f"Expected: {required_executable}; current: {current_executable}.\n"
+            "Run the generator with: "
+            f"{required_executable} {Path(__file__).name}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
 try:
     import cantools
 except ImportError:
-    print("ERROR: 'cantools' library is required. Install via: pip install cantools",
-          file=sys.stderr)
+    print(
+        "ERROR: 'cantools' library is required. Install via: "
+        f"{sys.executable} -m pip install cantools",
+        file=sys.stderr,
+    )
     sys.exit(1)
 
 
@@ -782,10 +816,12 @@ def _auto_select_node(db) -> str:
 
 
 def main():
+    validate_python_executable()
+
     ap = argparse.ArgumentParser(
         description="Generate C pack/unpack code from a Vector DBC file (using cantools).\n"
                     "When run WITHOUT arguments, auto-detects DBC file from SOA_DBC_File/ subfolder,\n"
-                    "outputs to ../../Can_tools_generated, and auto-selects the M_CORE node.",
+                    "outputs to DEFAULT_OUTPUT_DIR, and auto-selects the M_CORE node.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument("dbc", nargs="?", default=None, help="Path to the input .dbc file (auto-detected if omitted)")
@@ -799,9 +835,12 @@ def main():
 
     script_dir = Path(__file__).resolve().parent
 
-    # --- Auto-detect DBC file ---
+    # --- Resolve DBC file path ---
     if args.dbc is not None:
         dbc_path = Path(args.dbc).resolve()
+    elif DEFAULT_DBC_FILE_PATH is not None:
+        dbc_path = DEFAULT_DBC_FILE_PATH.resolve()
+        print(f"[Config] DBC file: {dbc_path}")
     else:
         dbc_path = _auto_find_dbc(script_dir)
         print(f"[Auto] DBC file: {dbc_path}")
@@ -810,7 +849,7 @@ def main():
     if args.outdir is not None:
         out_dir = Path(args.outdir).resolve()
     else:
-        out_dir = (script_dir / ".." / ".." / "Can_tools_generated").resolve()
+        out_dir = DEFAULT_OUTPUT_DIR.resolve()
         print(f"[Auto] Output dir: {out_dir}")
 
     if not dbc_path.is_file():
@@ -832,7 +871,7 @@ def main():
             print(f"[Auto] Selected node: {node}")
 
     # Generate
-    basename = dbc_path.stem  # e.g. "CANdbc_file"
+    basename = DEFAULT_OUTPUT_BASENAME.strip() or dbc_path.stem
 
     h_content = generate_header(db, basename, node)
     c_content = generate_source(db, basename, node)

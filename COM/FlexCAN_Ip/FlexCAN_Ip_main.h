@@ -19,7 +19,7 @@ extern "C" {
 
 #include "FlexCAN_Ip.h"
 #include "Mcal.h"
-#include "CANdbc_file.h"
+#include "SOA_CANdbc_Generated.h"
 
 /*==================================================================================================
  *                                         MACRO DEFINITIONS
@@ -116,39 +116,38 @@ unsigned char AINFC_Can_RxMsgL(unsigned char Bus_ID, unsigned char Mbx,
 /**
  * @brief Generic DBC RX dispatcher.
  *
- * Polls the specified RX mailbox and unpacks the payload using the
- * auto-generated Standard_Rx_unpack() dispatch function from CANdbc_file.c.
+ * Polls the RX mailbox (auto-resolved from MsgId) and unpacks the payload
+ * using the auto-generated Standard_Rx_unpack() dispatch function from
+ * SOA_CANdbc_Generated.c. Bus_ID and Mbx are resolved internally.
  *
- * @param[in]  Bus_ID FlexCAN instance number.
- * @param[in]  Mbx    RX Message Buffer index.
- * @param[in]  MsgId  CAN message ID used to select the DBC unpack function.
+ * @param[in]  MsgId  CAN message ID used to select the DBC unpack function
+ *                     and resolve the corresponding RX mailbox.
  * @param[out] msgRx  Pointer to the target DBC structure.
  * @return AINFC_CAN_OK      - RX completed and DBC unpack succeeded
  * @return AINFC_CAN_NO_MSG  - No new message available
  * @return AINFC_CAN_ERROR   - Unsupported ID, parameter error, or unpack error
  */
-unsigned char FlexCAN_Message_Rx_unpack(uint8 Bus_ID, uint8 Mbx, uint32 MsgId,
-                                        void *msgRx);
+unsigned char FlexCAN_Message_Rx_unpack(uint32 MsgId, void *msgRx);
 
 /**
  * @brief Generic DBC TX dispatcher.
  *
  * Packs the DBC structure using the auto-generated Standard_Tx_pack()
- * dispatch function from CANdbc_file.c, then sends through the specified
- * TX mailbox.
+ * dispatch function from SOA_CANdbc_Generated.c, then sends through the
+ * TX mailbox (auto-resolved from MsgId). Bus_ID and Mbx are resolved internally.
  *
- * @param[in] Bus_ID FlexCAN instance number.
- * @param[in] Mbx    TX Message Buffer index.
- * @param[in] MsgId  CAN message ID used to select the DBC pack function.
+ * @param[in] MsgId  CAN message ID used to select the DBC pack function
+ *                    and resolve the corresponding TX mailbox.
  * @param[in] TxData Pointer to the source DBC structure.
  * @return AINFC_CAN_OK    - TX started successfully
  * @return AINFC_CAN_BUSY  - Previous TX on this mailbox is still pending
  * @return AINFC_CAN_ERROR - Unsupported ID, parameter error, pack error, or TX error
  */
-unsigned char FlexCAN_Message_Tx_pack(uint8 Bus_ID, uint8 Mbx, uint32 MsgId,
-                                      const void *TxData);
+unsigned char FlexCAN_Message_Tx_pack(uint32 MsgId, const void *TxData);
 
 
+
+/**
 
 /**
  * @brief 10ms periodic CAN processing (Runnable)
@@ -158,6 +157,90 @@ unsigned char FlexCAN_Message_Tx_pack(uint8 Bus_ID, uint8 Mbx, uint32 MsgId,
  */
 
 void AINFC_Can_Cyclic_10ms(void);
+
+/*==================================================================================================
+ *                           CAN BUS DIAGNOSTIC TYPES & API
+ *==================================================================================================*/
+
+/**
+ * @brief CAN bus fault confinement state
+ *
+ * Derived from FlexCAN ESR1 register FLTCONF[5:4] field:
+ *   - 00b = Error Active  : Normal operation, TEC/REC < 128
+ *   - 01b = Error Passive : TEC or REC >= 128, node sends passive error frames
+ *   - 1xb = Bus-Off       : TEC >= 256, node is off the bus
+ *
+ * @note See S32G3 Reference Manual — FlexCAN ESR1 register description.
+ */
+typedef enum {
+  AINFC_CAN_STATE_ERROR_ACTIVE  = 0U,  /**< Normal: TEC < 128 and REC < 128 */
+  AINFC_CAN_STATE_ERROR_PASSIVE = 1U,  /**< Degraded: TEC or REC >= 128 */
+  AINFC_CAN_STATE_BUS_OFF       = 2U,  /**< Fatal: TEC >= 256, controller is off-bus */
+  AINFC_CAN_STATE_UNKNOWN       = 3U   /**< Unable to determine (should not occur) */
+} AINFC_CanBusState_t;
+
+/**
+ * @brief CAN bus diagnostic information structure
+ *
+ * Aggregates all runtime diagnostic data from the FlexCAN controller:
+ *   - Fault confinement state (Error Active / Passive / Bus-Off)
+ *   - TX and RX error counters (ECR register)
+ *   - Raw ESR1 register snapshot
+ *   - Individual error flags decoded from ESR1
+ */
+typedef struct {
+  /** Current fault confinement state */
+  AINFC_CanBusState_t busState;
+
+  /** TX error counter from ECR register (TXERRCNT, 0–255).
+   *  Incremented on each TX error, decremented on successful TX.
+   *  Bus-Off occurs when this counter reaches 256. */
+  uint8               txErrorCounter;
+
+  /** RX error counter from ECR register (RXERRCNT, 0–255).
+   *  Incremented on each RX error, decremented on successful RX. */
+  uint8               rxErrorCounter;
+
+  /** Raw ESR1 register value — see RM for full bit field mapping.
+   *  Useful for low-level debugging via Trace32. */
+  uint32              rawEsr1;
+
+  /* ---------- Individual error flags from ESR1 ---------- */
+  boolean             bitError;       /**< Bit0 or Bit1 error detected (ESR1[15:14]) */
+  boolean             ackError;       /**< ACK error — no other node acknowledged (ESR1[13]) */
+  boolean             crcError;       /**< CRC error in received frame (ESR1[12]) */
+  boolean             formError;      /**< Form error — fixed-form bit violation (ESR1[11]) */
+  boolean             stuffError;     /**< Stuff error — bit-stuffing rule violation (ESR1[10]) */
+  boolean             txWarning;      /**< TX warning — TEC >= 96 (ESR1[9]) */
+  boolean             rxWarning;      /**< RX warning — REC >= 96 (ESR1[8]) */
+  boolean             busOffInt;      /**< Bus-Off interrupt occurred (ESR1[2], w1c) */
+} AINFC_CanDiagInfo_t;
+
+/**
+ * @brief Get CAN bus diagnostic status
+ *
+ * Reads the FlexCAN ESR1 register and ECR error counters, then populates
+ * an AINFC_CanDiagInfo_t structure with the current bus health status.
+ *
+ * Typical usage in a 10ms/100ms periodic task or upon TX/RX failure:
+ * @code
+ *   AINFC_CanDiagInfo_t diag;
+ *   FlexCAN_GetBusDiagStatus(&diag);
+ *   if (diag.busState == AINFC_CAN_STATE_BUS_OFF) {
+ *       // Handle bus-off recovery
+ *   }
+ * @endcode
+ *
+ * @param[out] diagInfo  Pointer to diagnostic info structure (caller-allocated)
+ * @return AINFC_CAN_OK    — Diagnostic data retrieved successfully
+ * @return AINFC_CAN_ERROR — NULL pointer passed
+ *
+ * @note This function reads registers of FlexCAN instance 0 (CAN0).
+ *       The raw ESR1 value is a snapshot — error interrupt flags (w1c)
+ *       are NOT cleared by this function; call FlexCAN_Ip_ClearErrorStatus()
+ *       explicitly if needed.
+ */
+unsigned char FlexCAN_GetBusDiagStatus(AINFC_CanDiagInfo_t *diagInfo);
 
 #ifdef __cplusplus
 }

@@ -41,7 +41,7 @@
 									<listOptionValue builtIn="false" value="../RTD/include"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/SWC/Soa_Adapter}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/SWC/HealthMgmt}&quot;"/>
-									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/Can_tools_generated}&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/SWC/Soa_Adapter}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/SWC/DiagMgmt}&quot;"/>
 									<listOptionValue builtIn="false" value="../IPCF/src/common"/>
 									<listOptionValue builtIn="false" value="../IPCF/src/hw"/>
@@ -219,7 +219,6 @@
 					<fileInfo id="com.nxp.s32ds.cle.arm.mbs.arm32.bare.gnu.9.2.exe.debug.ram.1598057362.Project_Settings/Linker_Files" name="Linker_Files" rcbsApplicability="disable" resourcePath="Project_Settings/Linker_Files" toolsToInvoke=""/>
 					<sourceEntries>
 						<entry flags="VALUE_WORKSPACE_PATH" kind="sourcePath" name="COM"/>
-						<entry flags="VALUE_WORKSPACE_PATH" kind="sourcePath" name="Can_tools_generated"/>
 						<entry flags="VALUE_WORKSPACE_PATH" kind="sourcePath" name="Driver"/>
 						<entry flags="LOCAL|VALUE_WORKSPACE_PATH" kind="sourcePath" name="FreeRTOS"/>
 						<entry flags="LOCAL|VALUE_WORKSPACE_PATH" kind="sourcePath" name="IPCF"/>

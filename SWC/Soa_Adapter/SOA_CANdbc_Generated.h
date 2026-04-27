@@ -1,15 +1,15 @@
 /**
- * @file CANdbc_file.h
+ * @file SOA_CANdbc_Generated.h
  * @brief Auto-generated CAN message pack/unpack interface
  *
  * Generated from DBC by dbc_to_c_generator.py (cantools-based)
- * Date: 2026-04-24 13:09:19
+ * Date: 2026-04-24 17:53:02
  *
  * DO NOT EDIT — re-run the generator to update.
  */
 
-#ifndef CANDBC_FILE_H
-#define CANDBC_FILE_H
+#ifndef SOA_CANDBC_GENERATED_H
+#define SOA_CANDBC_GENERATED_H
 
 #include <stdint.h>
 #include <string.h>
@@ -78,7 +78,7 @@ typedef struct {
 /** Number of entries in the dispatch table */
 #define DBC_MESSAGE_TABLE_COUNT  (2U)
 
-/** Auto-generated dispatch table (defined in CANdbc_file.c) */
+/** Auto-generated dispatch table (defined in SOA_CANdbc_Generated.c) */
 extern const Dbc_MessageHandlerType g_dbcMessageTable[DBC_MESSAGE_TABLE_COUNT];
 
 /**
@@ -110,4 +110,4 @@ int Standard_Rx_unpack(uint32_t CAN_ID, void *msg, const uint8_t *data, uint8_t 
 extern Standard_100_Tx_t g_tx_Standard_100_Tx;  /**< TX 0x100 - DLC=2 */
 extern Standard_200_Rx_t g_rx_Standard_200_Rx;  /**< RX 0x200 - DLC=8 */
 
-#endif /* CANDBC_FILE_H */
+#endif /* SOA_CANDBC_GENERATED_H */

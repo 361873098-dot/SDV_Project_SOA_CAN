@@ -22,7 +22,7 @@ extern "C"{
 
 #include "soa_adapter.h"
 #include "FlexCAN_Ip_main.h"    /* AINFC_Can_TxMsg, AINFC_Can_RxMsgL, MB/ID defines */
-#include "CANdbc_file.h"        /* Standard_100_Tx_pack, Standard_200_Rx_unpack, DBC structs */
+#include "SOA_CANdbc_Generated.h" /* Standard_100_Tx_pack, Standard_200_Rx_unpack, DBC structs */
 #include "picc_api.h"           /* PICC_Init, PICC_APP_SOA, PICC_AppConfig_t */
 
 /*==================================================================================================

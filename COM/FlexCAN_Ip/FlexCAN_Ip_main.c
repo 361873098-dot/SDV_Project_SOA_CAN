@@ -28,7 +28,7 @@ extern "C" {
 #include "FlexCAN_Ip.h"
 #include "Mcal.h"
 #include "TJA1145A_Spi_Baremetal.h"
-#include "CANdbc_file.h"
+#include "SOA_CANdbc_Generated.h"
 
 
 
@@ -123,6 +123,48 @@ static unsigned char FlexCAN_GetRxMsgIdByMbx(uint8 Mbx, uint32 *msgId) {
 
   if (Mbx == AINFC_RX_MB1) {
     *msgId = g_rxMsgId[1];
+    return AINFC_CAN_OK;
+  }
+
+  return AINFC_CAN_ERROR;
+}
+
+/**
+ * @brief Reverse lookup: find TX MB index from CAN message ID
+ */
+static unsigned char FlexCAN_GetMbxByTxMsgId(uint32 msgId, uint8 *Mbx) {
+  if (Mbx == (uint8 *)0) {
+    return AINFC_CAN_ERROR;
+  }
+
+  if (msgId == g_txMsgId[0]) {
+    *Mbx = AINFC_TX_MB0;
+    return AINFC_CAN_OK;
+  }
+
+  if (msgId == g_txMsgId[1]) {
+    *Mbx = AINFC_TX_MB1;
+    return AINFC_CAN_OK;
+  }
+
+  return AINFC_CAN_ERROR;
+}
+
+/**
+ * @brief Reverse lookup: find RX MB index from CAN message ID
+ */
+static unsigned char FlexCAN_GetMbxByRxMsgId(uint32 msgId, uint8 *Mbx) {
+  if (Mbx == (uint8 *)0) {
+    return AINFC_CAN_ERROR;
+  }
+
+  if (msgId == g_rxMsgId[0]) {
+    *Mbx = AINFC_RX_MB0;
+    return AINFC_CAN_OK;
+  }
+
+  if (msgId == g_rxMsgId[1]) {
+    *Mbx = AINFC_RX_MB1;
     return AINFC_CAN_OK;
   }
 
@@ -283,25 +325,21 @@ unsigned char AINFC_Can_RxMsgL(unsigned char Bus_ID, unsigned char Mbx,
   return AINFC_CAN_NO_MSG;
 }
 
-unsigned char FlexCAN_Message_Rx_unpack(uint8 Bus_ID, uint8 Mbx, uint32 MsgId,
-                                        void *msgRx) {
+unsigned char FlexCAN_Message_Rx_unpack(uint32 MsgId, void *msgRx) {
   uint8 rxStatus;
   uint8 msg_frame[8] = {0U};
-  uint32 configuredMsgId;
+  uint8 Mbx;
 
   if (msgRx == (void *)0) {
     return AINFC_CAN_ERROR;
   }
 
-  if (FlexCAN_GetRxMsgIdByMbx(Mbx, &configuredMsgId) != AINFC_CAN_OK) {
+  /* Reverse lookup: find the MB index from the CAN message ID */
+  if (FlexCAN_GetMbxByRxMsgId(MsgId, &Mbx) != AINFC_CAN_OK) {
     return AINFC_CAN_ERROR;
   }
 
-  if (configuredMsgId != MsgId) {
-    return AINFC_CAN_ERROR;
-  }
-
-  rxStatus = AINFC_Can_RxMsgL(Bus_ID, Mbx, msg_frame);
+  rxStatus = AINFC_Can_RxMsgL(0U, Mbx, msg_frame);
   if (rxStatus != AINFC_CAN_OK) {
     return rxStatus;
   }
@@ -317,11 +355,16 @@ unsigned char FlexCAN_Message_Rx_unpack(uint8 Bus_ID, uint8 Mbx, uint32 MsgId,
 
 
 
-unsigned char FlexCAN_Message_Tx_pack(uint8 Bus_ID, uint8 Mbx, uint32 MsgId,
-                                      const void *TxData) {
+unsigned char FlexCAN_Message_Tx_pack(uint32 MsgId, const void *TxData) {
   uint8 txMsg[8] = {0U};
+  uint8 Mbx;
 
   if (TxData == (const void *)0) {
+    return AINFC_CAN_ERROR;
+  }
+
+  /* Reverse lookup: find the MB index from the CAN message ID */
+  if (FlexCAN_GetMbxByTxMsgId(MsgId, &Mbx) != AINFC_CAN_OK) {
     return AINFC_CAN_ERROR;
   }
 
@@ -331,7 +374,7 @@ unsigned char FlexCAN_Message_Tx_pack(uint8 Bus_ID, uint8 Mbx, uint32 MsgId,
     return AINFC_CAN_ERROR;
   }
 
-  return AINFC_Can_TxMsgById(Bus_ID, Mbx, MsgId, txMsg);
+  return AINFC_Can_TxMsgById(0U, Mbx, MsgId, txMsg);
 }
 
 
@@ -348,8 +391,7 @@ void AINFC_Can_Cyclic_10ms(void) {
    * RX Processing - poll both RX MBs
    * ==================================================================== */
 
-  (void)FlexCAN_Message_Rx_unpack(0U, AINFC_RX_MB0, STANDARD_200_RX_ID,
-                                  &g_rx_Standard_200_Rx);
+  (void)FlexCAN_Message_Rx_unpack(STANDARD_200_RX_ID, &g_rx_Standard_200_Rx);
   
 
   /* RX MB1 (ID=0x201) — no DBC mapping */
@@ -368,8 +410,7 @@ void AINFC_Can_Cyclic_10ms(void) {
   //Standard_100_Tx_pack(g_txData0, &g_tx_Standard_100_Tx, STANDARD_100_TX_DLC);
   //(void)AINFC_Can_TxMsg(0U, AINFC_TX_MB0, g_txData0);
 
-  (void)FlexCAN_Message_Tx_pack(0U, AINFC_TX_MB0, STANDARD_100_TX_ID,
-                                &g_tx_Standard_100_Tx);
+  (void)FlexCAN_Message_Tx_pack(STANDARD_100_TX_ID, &g_tx_Standard_100_Tx);
 
 
 
@@ -379,6 +420,86 @@ void AINFC_Can_Cyclic_10ms(void) {
   g_txData1[0] = (uint8)(g_canTxCount2 & 0xFFU);
   g_txData1[1] = (uint8)((g_canTxCount2 >> 8) & 0xFFU);
   (void)AINFC_Can_TxMsg(0U, AINFC_TX_MB1, g_txData1);
+}
+
+/*==================================================================================================
+ *  CAN BUS DIAGNOSTIC IMPLEMENTATION
+ *==================================================================================================*/
+
+/*
+ * ESR1 register bit masks (from S32G3 Reference Manual, FlexCAN chapter).
+ * Defined locally to avoid dependency on internal RTD header FlexCAN_Ip_HwAccess.h.
+ *
+ *  ESR1 bit layout (relevant fields):
+ *  ┌────────┬───────┬───────┬───────┬───────┬───────┬───────┬───────┐
+ *  │ Bit 15 │  14   │  13   │  12   │  11   │  10   │   9   │   8   │
+ *  │BIT1ERR │BIT0ERR│ACKERR │CRCERR │FRMERR │STFERR │ TXWRN │ RXWRN │
+ *  ├────────┼───────┼───────┼───────┼───────┼───────┼───────┼───────┤
+ *  │  Bit 7 │   6   │  5:4  │   3   │   2   │   1   │   0   │
+ *  │  IDLE  │  TX   │FLTCONF│  RX   │BOFFINT│ERRINT │ SYNCH │
+ *  └────────┴───────┴───────┴───────┴───────┴───────┴───────┘
+ *
+ *  FLTCONF[5:4] — Fault Confinement State:
+ *    00b = Error Active  (normal operation)
+ *    01b = Error Passive (degraded — TEC or REC >= 128)
+ *    1xb = Bus-Off       (fatal — TEC reached 256)
+ */
+#define AINFC_ESR1_BIT1ERR_MASK   (0x00008000U)  /* Bit 15 */
+#define AINFC_ESR1_BIT0ERR_MASK   (0x00004000U)  /* Bit 14 */
+#define AINFC_ESR1_ACKERR_MASK    (0x00002000U)  /* Bit 13 */
+#define AINFC_ESR1_CRCERR_MASK    (0x00001000U)  /* Bit 12 */
+#define AINFC_ESR1_FRMERR_MASK    (0x00000800U)  /* Bit 11 */
+#define AINFC_ESR1_STFERR_MASK    (0x00000400U)  /* Bit 10 */
+#define AINFC_ESR1_TXWRN_MASK     (0x00000200U)  /* Bit 9  */
+#define AINFC_ESR1_RXWRN_MASK     (0x00000100U)  /* Bit 8  */
+#define AINFC_ESR1_FLTCONF_MASK   (0x00000030U)  /* Bits [5:4] */
+#define AINFC_ESR1_FLTCONF_SHIFT  (4U)
+#define AINFC_ESR1_BOFFINT_MASK   (0x00000004U)  /* Bit 2  */
+
+/** FLTCONF decoded values */
+#define AINFC_FLTCONF_ERROR_ACTIVE   (0U)  /* 00b */
+#define AINFC_FLTCONF_ERROR_PASSIVE  (1U)  /* 01b */
+/* 10b or 11b = Bus-Off (bit 5 set) */
+
+unsigned char FlexCAN_GetBusDiagStatus(AINFC_CanDiagInfo_t *diagInfo) {
+  uint32 esr1;
+  uint32 fltconf;
+
+  if (diagInfo == (AINFC_CanDiagInfo_t *)0) {
+    return AINFC_CAN_ERROR;
+  }
+
+  /* ---- Read ESR1 register (snapshot) ---- */
+  esr1 = FlexCAN_Ip_GetErrorStatus(0U);
+  diagInfo->rawEsr1 = esr1;
+
+  /* ---- Read TX / RX error counters from ECR register ---- */
+  diagInfo->txErrorCounter = FlexCAN_Ip_GetControllerTxErrorCounter(0U);
+  diagInfo->rxErrorCounter = FlexCAN_Ip_GetControllerRxErrorCounter(0U);
+
+  /* ---- Decode FLTCONF[5:4] — Fault Confinement State ---- */
+  fltconf = (esr1 & AINFC_ESR1_FLTCONF_MASK) >> AINFC_ESR1_FLTCONF_SHIFT;
+  if (fltconf == AINFC_FLTCONF_ERROR_ACTIVE) {
+    diagInfo->busState = AINFC_CAN_STATE_ERROR_ACTIVE;
+  } else if (fltconf == AINFC_FLTCONF_ERROR_PASSIVE) {
+    diagInfo->busState = AINFC_CAN_STATE_ERROR_PASSIVE;
+  } else {
+    /* fltconf == 2 or 3 (bit 5 set) => Bus-Off */
+    diagInfo->busState = AINFC_CAN_STATE_BUS_OFF;
+  }
+
+  /* ---- Decode individual error flags ---- */
+  diagInfo->bitError   = ((esr1 & (AINFC_ESR1_BIT1ERR_MASK | AINFC_ESR1_BIT0ERR_MASK)) != 0U)
+                             ? TRUE : FALSE;
+  diagInfo->ackError   = ((esr1 & AINFC_ESR1_ACKERR_MASK)  != 0U) ? TRUE : FALSE;
+  diagInfo->crcError   = ((esr1 & AINFC_ESR1_CRCERR_MASK)  != 0U) ? TRUE : FALSE;
+  diagInfo->formError  = ((esr1 & AINFC_ESR1_FRMERR_MASK)  != 0U) ? TRUE : FALSE;
+  diagInfo->stuffError = ((esr1 & AINFC_ESR1_STFERR_MASK)  != 0U) ? TRUE : FALSE;
+  diagInfo->txWarning  = ((esr1 & AINFC_ESR1_TXWRN_MASK)   != 0U) ? TRUE : FALSE;
+  diagInfo->rxWarning  = ((esr1 & AINFC_ESR1_RXWRN_MASK)   != 0U) ? TRUE : FALSE;
+  diagInfo->busOffInt  = ((esr1 & AINFC_ESR1_BOFFINT_MASK)  != 0U) ? TRUE : FALSE;
+
+  return AINFC_CAN_OK;
 }
 
 #ifdef __cplusplus

@@ -1,14 +1,14 @@
 /**
- * @file CANdbc_file.c
+ * @file SOA_CANdbc_Generated.c
  * @brief Auto-generated CAN message pack/unpack implementation
  *
  * Generated from DBC by dbc_to_c_generator.py (cantools-based)
- * Date: 2026-04-24 13:09:19
+ * Date: 2026-04-24 17:53:02
  *
  * DO NOT EDIT — re-run the generator to update.
  */
 
-#include "CANdbc_file.h"
+#include "SOA_CANdbc_Generated.h"
 
 /* ====================================================================== */
 /*  Global message struct instances                                     */
