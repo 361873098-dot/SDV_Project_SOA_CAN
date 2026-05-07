@@ -2,33 +2,68 @@
 trigger: always_on
 ---
 
+底层 IPC 协议头 (8-Byte Header)
+所有报文使用大端字节序 (Big-Endian)，每个独立的报文开头为 8字节 Header [20, 21]：
+*   Byte 1: ProviderID
+*   Byte 2: MethodID (IPC 层级的标识，非 SOA Method)
+*   Byte 3: ConsumerID
+*   Byte 4: SessionID
+*   Byte 5: MessageType (如 0x05 REQUEST, 0x09 NOTIF_WITHOUT_ACK)
+*   Byte 6: ReturnCode (0x00 正常, 0x01 异常)
+*   Byte 7-8: Length (Payload 长度)
 
-以下需求是SOA 的客户需求，当前只需要关注M核；
-[REQ-SOA-010] 基础数据类型支持： M核SOA代理模块必须支持将C/C++原生基础数据类型作为业务功能的载体。支持的类型必须包括但不限于：int8 , int16, uint32  int64  uint8,uint16,uint32,uint64,q  float, double, bool，以及 enum（枚举）。
-[REQ-SOA-011] 复合数据类型支持： M核SOA代理模块必须支持对复合数据类型的代理，包括允许嵌套定义的结构体（struct）以及定长数组（Fixed-length Array）。
-[REQ-SOA-012] 跨核序列化与反序列化： M核SOA模块必须负责将上述数据类型序列化为字节流，填入核间私有通信协议的 Payload 字段，并在接收时进行反序列化。在转换结构体时，必须处理并保证严格的字节对齐（Byte Alignment）规则。
-[REQ-SOA-013] 字节序转换（大端约束）： 根据核间通信规范，M核SOA模块在打包 int16/uint16 及以上宽度的多字节数据类型（含浮点数）时，必须将其转换为**大端字节序（Big-Endian）**再填入 Payload 发送；在接收A核数据时，也必须按照大端规则解包转换为M核本地字节序。
-2. 连接状态感知与链路管理联动需求
-本部分定义M核SOA服务发布与核间物理链路状态的强关联性。
+--------------------------------------------------------------------------------
+4. SOA 协议映射与序列化需求 (SOA Serialization)
 
-[REQ-SOA-020] 握手状态依赖： M核SOA代理模块在系统启动后，必须等待底层通信链路通过 LINK_AVAILABLE 报文与A核完成握手（收到 ReturnCode 为 0x00）。在握手成功之前，SOA模块禁止启动服务发布或发送任何业务报文。
-[REQ-SOA-021] 连接断开感知与挂起： 当M核检测到A核发来的链路断开请求（Payload 0x02）、重启通知（Payload 0x03）或底层上报心跳超时（连续3次Pong丢失）时，SOA代理模块必须立即挂起所有代理的A核 SOME/IP 服务，并停止 CAN 信号到服务的转换。
-[REQ-SOA-022] 链路恢复重连： 当由于重启或心跳超时导致链路断开，且随后M核与A核重新建立连接并完成握手后，SOA模块必须能自动恢复服务的发布与代理状态。
-3. SOME/IP服务语义到核间私有协议的映射需求
-本部分定义M核抽象的 SOME/IP 概念如何具体落地到现有的异步 IPCF 堆叠报文协议上。
+4.1 基础数据类型支持
+根据服务矩阵定义，M核 SOA Adapter 必须支持将以下类型进行内存序列化并填入 Payload [3]：
+*   基础类型：int8~64, uint8~64, float, double, bool, 枚举类型。
+*   复杂类型：允许嵌套的结构体 (Struct)，定长数组 (Array) [3]。
 
-[REQ-SOA-030] 单向通知服务映射 (Notifier/Event)： 对于配置为 Field Notifier 和 Event 类型的 SOA 服务，M核SOA代理必须将其映射为核间通信协议中的 NOTIFICATION_WITHOUT_ACK (0x09) 报文进行发送。受限于M核异步特性，M核不可要求此类型消息的中间件ACK。
-[REQ-SOA-031] 方法调用请求映射 (Method/Getter/Setter)： 对于配置为 R/R Method, Field Getter, Field Setter 的请求动作，M核SOA代理必须将其映射为核间通信协议中的 REQUEST (0x05) 报文接收。
-[REQ-SOA-032] 方法响应匹配 (SessionID回传)： 针对 REQ-SOA-031 接收到的 REQUEST 报文，M核在完成业务处理（如读取 CAN 数据）后，必须通过 RESPONSE (0x80) 报文进行回复，并且必须将发出该请求的原报文中的 SessionID 无修改地填入响应报文中，以支持 A 核的异步匹配。
-4. CAN 信号的 SOA 化包装需求 (Signal-to-Service)
-本部分定义M核作为网关，实现传统 CAN 矩阵与 SOA 服务的双向数据流转。
+4.2 SOA 私有协议头 (14-Byte SOA Header inside IPC Payload)
+紧跟在底层 IPC 8字节 Header 之后，业务 Payload 内部必须采用严格的 14字节格式 [22, 23]：
+*   Byte 1-2: ServiceID (来自服务矩阵)
+*   Byte 3-4: MethodID (来自服务矩阵，AP 事件/方法 ID)
+*   Byte 5-6: InstanceID (来自服务矩阵)
+*   Byte 7-8: SessionID (请求时递增匹配，Event/Notifier 固定为 0)
+*   Byte 9-10: ReturnCode (有响应的调用使用，成功为 0，失败非 0)
+*   Byte 11-12: Length (后续实际业务参数的长度)
+*   Byte 13+: Actual Data (实际应用参数值，即 4.1 中的数据)
 
-[REQ-SOA-040] CAN信号汇聚与发布 (Signal to Event)： M核SOA代理应当具备缓存物理 CAN 总线接收信号的能力。当组合定义的 CAN 信号发生变化或满足触发条件时，SOA模块必须将其打包组装为对应的 Field Notifier 或 Event Payload 发送给 A 核。
-[REQ-SOA-041] CAN信号读取代理 (Getter Proxy)： 当 A 核通过 Field Getter 请求读取相关的 CAN 信号时，M核SOA代理必须能够获取对应 CAN 信号的最新缓存值，并通过 Response 报文及时回复。
-[REQ-SOA-042] 服务转 CAN 控制指令 (Method/Setter to Signal)： 当 M 核接收到 A 核发起的 Field Setter 或 Method REQUEST，且该服务对应到底层 CAN 控制时，M核SOA代理必须解析 Payload 中的意图，提取出控制数值，并触发底层 CAN 驱动发送对应的物理 CAN 报文。
-5. 工具化支持与配置一致性需求
-本部分定义代码生成工具（Creator）的边界，以保证核间硬编码不出错。
 
-[REQ-SOA-050] 服务矩阵导入与代码生成： M核SOA代理的代码架构必须支持由外部工具（Creator）导入标准服务矩阵（如 ARXML, Excel,  DBC）后直接生成接口与实例化配置代码，严格避免手工编写路由逻辑。
-[REQ-SOA-051] 核间路由 ID 一致性绑定： 工具生成的代码必须自动为每个 SOA 服务分配核间通信专用的 ProviderID、ConsumerID (取值1-254) 以及 MethodID，并保证其在整个系统中具有绝对的唯一性与两端（A/M）的一致性。
-[REQ-SOA-052] 数据结构隐式约束： 工具生成的 Payload 结构体代码必须符合 REQ-SOA-012 中关于强制字节对齐设定的宏声明，从而确保内存排布与 A 核生成的协议结构毫无偏差。
+
+--------------------------------------------------------------------------------
+5. SOA 核心服务代理业务逻辑 (M核开发重点)
+
+M核负责把内部业务变量和 MCU 的 CAN 信号，包装成以下逻辑代理给 A 核：
+
+5.1 单向通知类：Event 与 Field Notifier
+*   底层映射：使用 IPC Event 机制，固定底层 IPC `EventID=3`，`MessageType=0x09` (NOTIFICATION_WITHOUT_ACK) [23]。
+*   ACK 约束：根据 M 核异步机制限制，**M核只发送不带 ACK 的 EVENT (0x09)**。如果上层应用配置了需要带 ACK 的事件，M核核间组件会主动丢弃并**不做处理** [5, 24]。
+*   **初值同步 (必须实现的关键逻辑)**：一旦底层建链握手成功，M核**必须立刻主动向 A核发送一次所有 Notifier 的当前初值**。完成前 A核服务不可用 [23, 25]。
+*   支持组包：多个 Event/Notifier 的 14 字节数据体可拼接成一个长 Payload 放在同一个底层报文内进行发送以提高效率 [23, 26]。
+
+5.2 请求响应类：Field Getter, Field Setter 与 R/R Method
+*   底层映射：使用 IPC Method 机制，固定底层 IPC `MethodID=1`，请求的 MessageType 为 `REQUEST` (0x05)，响应为 `RESPONSE` (0x80) [26, 27]。
+*   SessionID 匹配：M核收到 A核异步发来的 REQUEST 后，必须解析出 `SessionID`，处理完业务后，**必须将相同的 SessionID 填入 RESPONSE 报文返回** [27]。由于需要区分同一类型消息的不同报文，断开重连后此全局（或局部）变量的 SessionID 重置 [6]。
+*   **Setter 联动约束 (最易错点)**：
+    *   当 Field **同时**定义了 Setter 和 Notifier：M核在完成 Setter 的目标值写入后，必须立刻**重新读取该 Field 当前的 Notifier 值**，并将这个最新状态放入 RESPONSE 返回给 A核，以确保状态一致 [27, 28]。
+*   当 Field **仅**定义 Setter：写入完成后，M核返回 `Length=0` 的空数据 RESPONSE 报文 [27]。
+
+如果M核收到来自A核发来的Field Setter指令，且当前需要SETTER 的报文对M核来说是接收报文，那么M核的RESPONSE 是NOT OK
+
+
+FF Method 当前不支持
+
+5.3 S2S (Signal-to-Service) 代理处理
+*   M核接收到 Setter 控制指令后，如果该 Field 绑定了 CAN 信号，SOA Agent 必须通过 RTE 将 Payload 转交 S2S Agent，调用 COM 接口改变物理 CAN 矩阵信号 [1-3]。
+
+--------------------------------------------------------------------------------
+1. 异常边界与状态机管理 (Edge Cases & State Machine)
+
+6.1 链路状态机强关联
+*   建链前：即便底层 IPCF 初始化完毕，在握手成功前，M核绝对**禁止**向 A核发送任何业务数据 [25]。
+*   断链时：一旦 A核发送 0x02 断开报文或发生心跳超时，M核必须立即停止该链路上的 SOA 业务报文发送，并作废正在处理的未完成 REQUEST 请求 [25, 29]。
+6.2 返回码与校验
+*   业务失败：若 M核应用层在处理 Setter 或 Method 时发生错误，必须向 A核回复 `RESPONSE` 报文，并将其中的 `ReturnCode` 字段设置为 `0x01` (E_NOT_OK) [30]。
+*   超时防范：M核中间件必须保证业务分发调用的实时性。若长时间阻塞导致未能及时回复，A核会直接判定本次调用超时失效 [27]。

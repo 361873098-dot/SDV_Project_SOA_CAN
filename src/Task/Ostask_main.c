@@ -9,7 +9,7 @@
  *   - Event-driven (queue/notification blocking) tasks remain as independent FreeRTOS
  *     tasks but are created here for centralized visibility
  *   - Future business modules only need to add one function call to the appropriate
- *     period group — no new FreeRTOS task or stack allocation required
+ *     period group -- no new FreeRTOS task or stack allocation required
  *
  * Task creation overview (OsTask_Creation_All):
  *   +------------------+----------+--------------+-------------------------------+
@@ -20,7 +20,7 @@
  *   +------------------+----------+--------------+-------------------------------+
  *
  * Note: softirq task (priority 4, 256 Words) is created internally by
- *       ipc_shm_init() in IPCF driver — NOT managed here.
+ *       ipc_shm_init() in IPCF driver -- NOT managed here.
  */
 
 #if defined(__cplusplus)
@@ -40,7 +40,7 @@ extern "C"{
 
 /* Application module headers - for periodic Runnables */
 #include "FlexCAN_Ip_main.h"        /* FlexCAN_Process_Init()                   */
-#include "soa_adapter.h"             /* SoaAdapter_Main()                        */
+#include "soa_adapter_main.h"             /* SoaAdapter_Main()                        */
 #include "TJA1145A_Spi_Baremetal.h"  /* Spi_Baremetal_Tja1145_PeriodicTest()     */
 #include "picc_stack.h"              /* PICC_StackProcess()                      */
 #include "picc_heartbeat.h"          /* PICC_HeartbeatProcess()                  */
@@ -142,6 +142,9 @@ void TASK_M0_10MS(void)
 
     /* PICC Link: Handle connection requests (Client mode) */
     PICC_LinkProcess();
+
+    /* SOA Adapter: Notifier change detection + Getter/Setter request handling */
+    SoaAdapter_Main();
 
     /* Power State Machine */
     Pwsm_Main();
