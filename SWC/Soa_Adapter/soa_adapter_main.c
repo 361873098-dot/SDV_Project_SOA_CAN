@@ -62,6 +62,15 @@ static uint8 s_methodRxBuf[SOA_MAX_MSG_SIZE];
 /** Scratch buffer for method response payload */
 static uint8 s_methodRspBuf[SOA_MAX_MSG_SIZE];
 
+/**
+ * Batch buffer for initial Notifier value sync.
+ * Holds concatenated SOA messages: [SOA_Header(12B) + Data] * N.
+ * Max size = SOA_NOTIFIER_COUNT * (SOA_HEADER_SIZE + max single data size).
+ * In practice, with 2 notifiers and max 2B data each, ~28 bytes suffice.
+ * Use SOA_MAX_MSG_SIZE as safe upper bound.
+ */
+static uint8 s_soaBatchBuf[SOA_MAX_MSG_SIZE];
+
 /*==================================================================================================
  *                              SOA HEADER SERIALIZATION (Big-Endian)
  *==================================================================================================*/
@@ -173,24 +182,74 @@ static sint8 SOA_SendNotifier(uint8 svcIdx)
 }
 
 /**
- * @brief Send all Notifier initial values (called once after link established)
+ * @brief Send all Notifier initial values in a single batched IPC message
+ *
+ * Per SOA spec: "multiple Event/Notifier 14-byte SOA bodies can be
+ * concatenated into one long Payload inside a single underlying IPC
+ * message to improve efficiency."
+ *
+ * This function concatenates all Notifier SOA payloads (12B header +
+ * actual data each) into s_soaBatchBuf, then sends the entire batch
+ * with a single PICC_SendEvent() call.
+ *
+ * Called once when the link transitions from DISCONNECTED to CONNECTED.
  */
 static void SOA_SendAllNotifierInitValues(void)
 {
     uint8 i;
+    uint16 batchOffset = 0U;
+
+    /* Phase 1: Build batched SOA payload — concatenate all Notifiers */
     for (i = 0U; i < SOA_NOTIFIER_COUNT; i++)
     {
         uint8 svcIdx = g_soaNotifierIndices[i];
-        (void)SOA_SendNotifier(svcIdx);
+        const SOA_ServiceConfig_t *svc = &g_soaServiceTable[svcIdx];
+        SOA_Header_t hdr;
+        uint16 dataLen;
+        uint16 msgLen;
 
-        /* Initialize change-detection cache */
-        if (g_soaServiceTable[svcIdx].readFunc != NULL_PTR)
+        if ((svc->readFunc == NULL_PTR) || (svc->serviceType != SOA_SERVICE_NOTIFIER))
         {
-            s_soaState.notifCache[i].prevLen =
-                g_soaServiceTable[svcIdx].readFunc(
-                    s_soaState.notifCache[i].prevData, SOA_MAX_DATA_SIZE);
-            s_soaState.notifCache[i].isValid = TRUE;
+            continue;
         }
+
+        /* Read signal value into batch buffer after header slot */
+        if ((batchOffset + SOA_HEADER_SIZE) >= SOA_MAX_MSG_SIZE)
+        {
+            break; /* Safety: no room for another header */
+        }
+
+        dataLen = svc->readFunc(&s_soaBatchBuf[batchOffset + SOA_HEADER_SIZE],
+                                (uint16)(SOA_MAX_MSG_SIZE - batchOffset - SOA_HEADER_SIZE));
+        if (dataLen == 0U)
+        {
+            continue;
+        }
+
+        /* Build SOA header for this Notifier */
+        hdr.SOA_ServiceID  = svc->SOA_ServiceID;
+        hdr.SOA_MethodID   = svc->SOA_MethodID;
+        hdr.SOA_InstanceID = svc->SOA_InstanceID;
+        hdr.SOA_SessionID  = 0U;  /* Notifier: SessionID = 0 */
+        hdr.SOA_ReturnCode = 0U;  /* Notifier: ReturnCode = 0 */
+        hdr.SOA_Length     = dataLen;
+
+        SOA_SerializeHeader(&s_soaBatchBuf[batchOffset], &hdr);
+
+        msgLen = SOA_HEADER_SIZE + dataLen;
+        batchOffset += msgLen;
+
+        /* Initialize change-detection cache for this Notifier */
+        s_soaState.notifCache[i].prevLen =
+            svc->readFunc(s_soaState.notifCache[i].prevData, SOA_MAX_DATA_SIZE);
+        s_soaState.notifCache[i].isValid = TRUE;
+    }
+
+    /* Phase 2: Send the entire batch in ONE PICC_SendEvent call */
+    if (batchOffset > 0U)
+    {
+        (void)PICC_SendEvent(PICC_APP_SOA, SOA_IPC_EVENT_ID_FOR_NOTIF,
+                             s_soaBatchBuf, batchOffset, PICC_EVENT_WITHOUT_ACK);
     }
 }
 

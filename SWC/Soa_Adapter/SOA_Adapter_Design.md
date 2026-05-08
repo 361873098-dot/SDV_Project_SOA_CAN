@@ -219,10 +219,12 @@ flowchart TD
 
 ### 6.3 Notifier 发送流程
 
-#### 6.3.1 初值同步 (`SOA_SendAllNotifierInitValues`)
+#### 6.3.1 初值同步 (`SOA_SendAllNotifierInitValues`) — 组包发送
 - **触发条件：** 链路从 DISCONNECTED 转换到 CONNECTED
-- **行为：** 遍历 `g_soaNotifierIndices`，为每个 Notifier 调用 `SOA_SendNotifier()`
+- **行为：** 遍历 `g_soaNotifierIndices`，将每个 Notifier 的 SOA 报文（12B Header + Data）**拼接**到 `s_soaBatchBuf` 中，最后通过 **一次** `PICC_SendEvent()` 调用发送全部初值
+- **组包格式：** `[SOA_Header(12B) + Data_1] [SOA_Header(12B) + Data_2] ... [SOA_Header(12B) + Data_N]`
 - **同时：** 初始化变化检测缓存（`prevData`、`prevLen`、`isValid=TRUE`）
+- **效率：** 将 N 次 PICC_SendEvent 调用减少为 1 次，降低 IPC 调用开销
 
 #### 6.3.2 变化检测发送 (`SOA_CheckAndSendNotifiers`)
 - **周期：** 10ms
@@ -233,6 +235,39 @@ flowchart TD
 2. 构建 SOA Header（SessionID=0, ReturnCode=0）
 3. 序列化 Header 到 `s_soaTxBuf[0..11]`
 4. 调用 `PICC_SendEvent(PICC_APP_SOA, EventID=3, buf, len, WITHOUT_ACK)`
+
+#### 6.3.4 SOA 层组包机制 (SOA-Level Batching)
+
+根据 SOA 协议规范要求：*多个 Event/Notifier 的 14 字节数据体可拼接成一个长 Payload 放在同一个底层报文内发送以提高效率*。
+
+**当前实现范围：** 仅在初值同步阶段（`SOA_SendAllNotifierInitValues`）使用 SOA 层组包。周期变化检测发送（`SOA_CheckAndSendNotifiers`）仍然逐条发送。
+
+**组包数据格式：**
+```
+┌────────────────────────────────┬────────────────────────────────┬─────┐
+│ SOA Msg 1 (12B Hdr + Data)    │ SOA Msg 2 (12B Hdr + Data)    │ ... │
+└────────────────────────────────┴────────────────────────────────┴─────┘
+                    ↓ 整体作为一个 IPC Payload ↓
+┌──────────────────┬──────────────────────────────────────────────┐
+│  IPC 8B Header   │         Batched SOA Payload                 │
+└──────────────────┴──────────────────────────────────────────────┘
+```
+
+**示例（当前 2 个 Notifier 初值同步）：**
+```
+SOA Msg 1: VehicleSpeed (14B = 12B header + 2B data)
+  00 01  80 01  00 01  00 00  00 00  00 02  XX XX
+
+SOA Msg 2: VehicleModeSt (13B = 12B header + 1B data)
+  00 05  80 01  00 01  00 00  00 00  00 01  XX
+
+→ 拼接后 PICC_SendEvent payload 长度 = 14 + 13 = 27 字节
+```
+
+**关键约束：**
+- 组包总大小不得超过 `SOA_MAX_MSG_SIZE` (268B)
+- A 核解析时需按 SOA_Header.SOA_Length 逐条解包
+- 此组包仅为 SOA 层数据的拼接，底层 IPCF 堆叠（CRC使能位 + Counter + CRC16）由 PICC Stack 层独立处理
 
 ### 6.4 Method 请求处理流程
 
@@ -333,11 +368,12 @@ typedef uint8  (*SOA_SignalWriteFunc_t)(const uint8 *inBuf, uint16 len);
 | 变量 | 类型 | 大小 | 用途 |
 |------|------|------|------|
 | `s_soaState` | `SOA_AdapterState_t` | ~518B | 模块状态 + Notifier 缓存 |
-| `s_soaTxBuf` | `uint8[]` | 268B | Notifier 发送构建缓冲区 |
+| `s_soaTxBuf` | `uint8[]` | 268B | Notifier 逐条发送构建缓冲区 |
+| `s_soaBatchBuf` | `uint8[]` | 268B | 初值同步组包缓冲区 |
 | `s_methodRxBuf` | `uint8[]` | 268B | Method 请求接收缓冲区 |
 | `s_methodRspBuf` | `uint8[]` | 268B | Method 响应构建缓冲区 |
 
-> 总静态 RAM 占用约 **1.3 KB**
+> 总静态 RAM 占用约 **1.6 KB**
 
 ---
 
@@ -438,3 +474,4 @@ TASK_M0_10MS() {
 - M 核不支持同步等待，所有操作异步/轮询
 - 建链前禁止发送业务数据
 - 所有多字节字段使用大端序列化
+- **初值同步使用 SOA 层组包**（多个 Notifier 拼接为一个 IPC Payload），周期变化检测逐条发送
