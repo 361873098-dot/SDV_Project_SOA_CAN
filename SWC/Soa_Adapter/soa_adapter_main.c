@@ -270,15 +270,18 @@ static void SOA_HandleMethodRequest(const uint8 *reqData, uint16 reqLen, uint8 i
     /* Parse SOA header */
     SOA_DeserializeHeader(reqData, &reqHdr);
 
+    /* Pre-fill response header: echo back IDs and SessionID from request.
+     * This avoids duplicating these 4 lines in every branch below. */
+    rspHdr.SOA_ServiceID  = reqHdr.SOA_ServiceID;
+    rspHdr.SOA_MethodID   = reqHdr.SOA_MethodID;
+    rspHdr.SOA_InstanceID = reqHdr.SOA_InstanceID;
+    rspHdr.SOA_SessionID  = reqHdr.SOA_SessionID;
+
     /* Find matching service */
     svcIdx = SOA_FindService(reqHdr.SOA_ServiceID, reqHdr.SOA_MethodID, reqHdr.SOA_InstanceID);
     if (svcIdx == 0xFFU)
     {
         /* Service not found — send error response */
-        rspHdr.SOA_ServiceID  = reqHdr.SOA_ServiceID;
-        rspHdr.SOA_MethodID   = reqHdr.SOA_MethodID;
-        rspHdr.SOA_InstanceID = reqHdr.SOA_InstanceID;
-        rspHdr.SOA_SessionID  = reqHdr.SOA_SessionID;
         rspHdr.SOA_ReturnCode = 1U;  /* E_NOT_OK */
         rspHdr.SOA_Length     = 0U;
 
@@ -293,11 +296,6 @@ static void SOA_HandleMethodRequest(const uint8 *reqData, uint16 reqLen, uint8 i
 
     const SOA_ServiceConfig_t *svc = &g_soaServiceTable[svcIdx];
 
-    /* Prepare response header (echo back IDs and SessionID) */
-    rspHdr.SOA_ServiceID  = reqHdr.SOA_ServiceID;
-    rspHdr.SOA_MethodID   = reqHdr.SOA_MethodID;
-    rspHdr.SOA_InstanceID = reqHdr.SOA_InstanceID;
-    rspHdr.SOA_SessionID  = reqHdr.SOA_SessionID;  /* Echo SOA SessionID */
     rspHdr.SOA_ReturnCode = 0U;
 
     switch (svc->serviceType)
@@ -334,10 +332,18 @@ static void SOA_HandleMethodRequest(const uint8 *reqData, uint16 reqLen, uint8 i
                 ipcReturnCode = 0x01U;
                 rspDataLen = 0U;
             }
-            else if (svc->hasLinkedNotifier && (svc->readFunc != NULL_PTR))
+            else if (svc->hasLinkedNotifier)
             {
-                /* Setter+Notifier: read current Notifier value for response */
-                rspDataLen = svc->readFunc(&s_methodRspBuf[SOA_HEADER_SIZE], SOA_MAX_DATA_SIZE);
+                /* Setter+Notifier: read current Notifier value via linked entry's readFunc */
+                const SOA_ServiceConfig_t *linkedSvc = &g_soaServiceTable[svc->linkedNotifierIdx];
+                if (linkedSvc->readFunc != NULL_PTR)
+                {
+                    rspDataLen = linkedSvc->readFunc(&s_methodRspBuf[SOA_HEADER_SIZE], SOA_MAX_DATA_SIZE);
+                }
+                else
+                {
+                    rspDataLen = 0U;
+                }
             }
             else
             {

@@ -8,7 +8,7 @@
  *
  * Signal Mapping:
  *   Notifier  DriSpeedSt      → g_rx_Standard_200_Rx.VehicleSpeed       (RX 0x200)
- *   Notifier  VehicleModeSt   → g_rx_Standard_200_Rx.WorkVehicleModeSt  (RX 0x200)
+ *   Notifier  VehicleModeSt   -> g_tx_Standard_100_Tx.VehicleMode       (TX 0x100)
  *   Getter    ParkingSts      → g_rx_Standard_200_Rx.ParkingSts          (RX 0x200)
  *   Getter    HVBatterySts    → g_rx_Standard_200_Rx.HighVoltageBatterySts (RX 0x200)
  *   Getter    IgnitionSts     → g_tx_Standard_100_Tx.IgnitionSts         (TX 0x100)
@@ -51,18 +51,19 @@ uint16 SOA_ReadVehicleSpeed(uint8 *outBuf, uint16 maxLen)
 }
 
 /**
- * @brief Read WorkVehicleModeSt signal (Notifier: Atom_BCM_VehicleModeSt)
+ * @brief Read VehicleMode signal (Notifier: Atom_BCM_VehicleMode)
  *
- * Source: g_rx_Standard_200_Rx.WorkVehicleModeSt (uint8, 0-2)
+ * Reads the value set by Entry [4] Setter (Atom_BCM_VehicleMode).
+ * Source: g_tx_Standard_100_Tx.VehicleMode (uint8, 0-2)
  * Serialized as 1 byte.
  */
-uint16 SOA_ReadWorkVehicleModeSt(uint8 *outBuf, uint16 maxLen)
+uint16 SOA_ReadWorkVehicleMode(uint8 *outBuf, uint16 maxLen)
 {
     if ((outBuf == NULL_PTR) || (maxLen < 1U))
     {
         return 0U;
     }
-    outBuf[0] = (uint8)g_rx_Standard_200_Rx.WorkVehicleModeSt;
+    outBuf[0] = (uint8)g_tx_Standard_100_Tx.VehicleMode;
     return 1U;
 }
 
@@ -135,20 +136,6 @@ uint8 SOA_WriteVehicleMode(const uint8 *inBuf, uint16 len)
     return 0U;  /* Success */
 }
 
-/**
- * @brief Read current VehicleMode value after Setter write (for Setter+Notifier linked response)
- *
- * When Atom_BCM_VehicleMode (Setter) is invoked and it has a linked Notifier
- * (Atom_BCM_VehicleModeSt), the response must contain the current Notifier value.
- * This reads WorkVehicleModeSt from RX, which is the actual feedback value.
- *
- * Source: g_rx_Standard_200_Rx.WorkVehicleModeSt (uint8, 0-2)
- */
-uint16 SOA_ReadVehicleModeCurrent(uint8 *outBuf, uint16 maxLen)
-{
-    /* Read the Notifier value (current state from CAN RX) */
-    return SOA_ReadWorkVehicleModeSt(outBuf, maxLen);
-}
 
 /*==================================================================================================
  *                              SOA SERVICE CONFIGURATION TABLE
@@ -223,7 +210,7 @@ const SOA_ServiceConfig_t g_soaServiceTable[SOA_SERVICE_TABLE_COUNT] =
         .SOA_MethodID       = SOA_MID_VEHICLE_MODE_SETTER,  /* 0x5001 */
         .SOA_InstanceID     = SOA_INSTANCE_ID_DEFAULT,       /* 0x0001 */
         .serviceType        = SOA_SERVICE_SETTER,
-        .readFunc           = SOA_ReadVehicleModeCurrent,    /* Read Notifier value for response */
+        .readFunc           = NULL_PTR,                      /* Setter: no readFunc, uses linked Notifier [5] */
         .writeFunc          = SOA_WriteVehicleMode,
         .SOA_EventGroupID   = 0U,
         .dataSize           = 1U,
@@ -231,13 +218,13 @@ const SOA_ServiceConfig_t g_soaServiceTable[SOA_SERVICE_TABLE_COUNT] =
         .linkedNotifierIdx  = SOA_SVC_IDX_VEHICLE_MODE_NOTIF  /* Index 5 */
     },
 
-    /* [5] Atom_BCM_VehicleModeSt — Notifier: WorkVehicleModeSt (M→A) */
+    /* [5] Atom_BCM_VehicleModeSt -- Notifier: VehicleMode from TX (M->A) */
     {
         .SOA_ServiceID      = SOA_SID_BCM_VEHICLE_MODE,     /* 0x0005 */
         .SOA_MethodID       = SOA_MID_VEHICLE_MODE_NOTIF,   /* 0x8001 */
         .SOA_InstanceID     = SOA_INSTANCE_ID_DEFAULT,       /* 0x0001 */
         .serviceType        = SOA_SERVICE_NOTIFIER,
-        .readFunc           = SOA_ReadWorkVehicleModeSt,
+        .readFunc           = SOA_ReadWorkVehicleMode,
         .writeFunc          = NULL_PTR,
         .SOA_EventGroupID   = SOA_EG_VEHICLE_MODE_STS,      /* 0x0001 */
         .dataSize           = 1U,

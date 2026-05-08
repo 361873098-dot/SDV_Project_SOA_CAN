@@ -191,7 +191,7 @@ typedef struct {
 #define SOA_MID_HV_BATT_GETTER          (0x5001U)  /**< Getter: HighVoltageBatterySts */
 #define SOA_MID_IGNITION_GETTER         (0x5001U)  /**< Getter: IgnitionSts */
 #define SOA_MID_VEHICLE_MODE_SETTER     (0x5001U)  /**< Setter: VehicleMode (TBD, using 0x5001) */
-#define SOA_MID_VEHICLE_MODE_NOTIF      (0x8001U)  /**< Notifier: WorkVehicleModeSt */
+#define SOA_MID_VEHICLE_MODE_NOTIF      (0x8001U)  /**< Notifier: VehicleMode (from TX) */
 
 /* --- InstanceID (all services use instance 1) --- */
 #define SOA_INSTANCE_ID_DEFAULT         (0x0001U)
@@ -225,9 +225,6 @@ uint16 SOA_ReadIgnitionSts(uint8 *outBuf, uint16 maxLen);
 
 /* Setter write function */
 uint8  SOA_WriteVehicleMode(const uint8 *inBuf, uint16 len);
-
-/* Setter-linked Notifier read (read current value after Setter write) */
-uint16 SOA_ReadVehicleModeCurrent(uint8 *outBuf, uint16 maxLen);
 
 #if defined(__cplusplus)
 }
