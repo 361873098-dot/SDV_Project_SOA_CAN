@@ -144,7 +144,7 @@ typedef struct {
     SOA_ServiceType_e   serviceType;        /**< Notifier / Getter / Setter */
     SOA_SignalReadFunc_t  readFunc;         /**< Read signal value (for Notifier and Getter) */
     SOA_SignalWriteFunc_t writeFunc;        /**< Write signal value (for Setter only, NULL otherwise) */
-    uint16              SOA_EventGroupID;   /**< Eventgroup ID (Notifier only, 0 for others) */
+    uint16              SOA_EventGroupID;   /**< Eventgroup ID (Notifier only, 0 for others currently not use) */
     uint8               dataSize;           /**< Expected data size in bytes for this signal */
     boolean             hasLinkedNotifier;  /**< TRUE if this Setter has a linked Notifier */
     uint8               linkedNotifierIdx;  /**< Index into service table of the linked Notifier */
