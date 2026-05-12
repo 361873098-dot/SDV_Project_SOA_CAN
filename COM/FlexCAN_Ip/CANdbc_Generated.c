@@ -3,7 +3,7 @@
  * @brief Auto-generated CAN message pack/unpack implementation
  *
  * Generated from DBC by dbc_to_c_generator.py (cantools-based)
- * Date: 2026-05-12 14:38:17
+ * Date: 2026-05-13 13:02:23
  *
  * DO NOT EDIT — re-run the generator to update.
  */
@@ -137,4 +137,53 @@ int Standard_Rx_unpack(uint32_t CAN_ID, void *msg, const uint8_t *data, uint8_t 
     }
 
     return -1;  /* CAN_ID not found */
+}
+
+/* ====================================================================== */
+/*  Per-signal getter functions                                         */
+/* ====================================================================== */
+
+/* --- Standard_100_Tx (0x100, TX) --- */
+/* --- Standard_100_Tx (0x100, TX) --- if *IgnitionSts is NULL this function is read else it's write */
+uint8_t Can_R_W_signal_IgnitionSts(uint8_t* IgnitionSts)
+{
+    if(IgnitionSts == NULL)
+    {
+        return (g_tx_Standard_100_Tx.IgnitionSts);
+    }
+    else
+    {
+        g_tx_Standard_100_Tx.IgnitionSts = *IgnitionSts;
+        return (g_tx_Standard_100_Tx.IgnitionSts);
+    }
+}
+
+/* --- Standard_100_Tx (0x100, TX) --- if *VehicleMode is NULL this function is read else it's write */
+uint8_t Can_R_W_signal_VehicleMode(uint8_t* VehicleMode)
+{
+    if(VehicleMode == NULL)
+    {
+        return (g_tx_Standard_100_Tx.VehicleMode);
+    }
+    else
+    {
+        g_tx_Standard_100_Tx.VehicleMode = *VehicleMode;
+        return (g_tx_Standard_100_Tx.VehicleMode);
+    }
+}
+
+/* --- Standard_200_Rx (0x200, RX) --- */
+uint8_t Can_Get_Rx_signal_ParkingSts(void)
+{
+    return (g_rx_Standard_200_Rx.ParkingSts);
+}
+
+uint16_t Can_Get_Rx_signal_HighVoltageBatterySts(void)
+{
+    return (g_rx_Standard_200_Rx.HighVoltageBatterySts);
+}
+
+uint16_t Can_Get_Rx_signal_VehicleSpeed(void)
+{
+    return (g_rx_Standard_200_Rx.VehicleSpeed);
 }
