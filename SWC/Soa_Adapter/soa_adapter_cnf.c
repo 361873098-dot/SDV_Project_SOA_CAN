@@ -24,7 +24,7 @@ extern "C"{
  *==================================================================================================*/
 
 #include "soa_adapter_cnf.h"
-#include "SOA_CANdbc_Generated.h"   /* DBC global structs */
+#include "CANdbc_Generated.h"   /* DBC global structs */
 
 /*==================================================================================================
  *                              SIGNAL READ FUNCTIONS (Notifier + Getter)

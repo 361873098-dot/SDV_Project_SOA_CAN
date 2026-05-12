@@ -23,7 +23,7 @@ extern "C" {
 
 /* Application headers */
 #include "Picc_main.h"
-
+#include "Pmic_driver_main.h"
 /*==================================================================================================
  *                                         Macro Definitions
  *==================================================================================================*/
@@ -45,8 +45,9 @@ uint16 read_m_otp_vpre;
 uint32 TestLoopCnt = 999999999;
 uint32 loop_cnt = 0;
 
-
-
+//VR5510_MFlg1RegType M_Flag1RegData;
+VR5510_DeviceIdRegType M_DeviceIdRegData;
+VR5510_MModeRegType M_ModeRegData;
 /*==================================================================================================
  *                                         Initialization Entry
  *==================================================================================================*/
@@ -66,17 +67,17 @@ void Pmic_driver_init(void)
 	
 	
 	  /*  Read FLAG3 Register */
-	Pmic_ReadRegister(PmicConf_PmicDevice_PmicDevice_0, PMIC_MAIN_UNIT, PMIC_VR55XX_M_FLAG3_ADDR8, &read_m_flag3_0);
+	//Pmic_ReadRegister(PmicConf_PmicDevice_PmicDevice_0, PMIC_MAIN_UNIT, PMIC_VR55XX_M_FLAG3_ADDR8, &read_m_flag3_0);
 	/*	  Read M_DEVICEID Register	  */
-	Pmic_ReadRegister(PmicConf_PmicDevice_PmicDevice_0, PMIC_MAIN_UNIT, PMIC_VR55XX_M_DEVICEID_ADDR8, &read_m_deviceid);
+	Pmic_ReadRegister(PmicConf_PmicDevice_PmicDevice_0, PMIC_MAIN_UNIT, PMIC_VR55XX_M_DEVICEID_ADDR8, &M_DeviceIdRegData);
 	
 	/*	  Read M_MODE Register	  */
-	Pmic_ReadRegister(PmicConf_PmicDevice_PmicDevice_0, PMIC_MAIN_UNIT, PMIC_VR55XX_M_MODE_ADDR8, &read_m_mode);
+	Pmic_ReadRegister(PmicConf_PmicDevice_PmicDevice_0, PMIC_MAIN_UNIT, PMIC_VR55XX_M_MODE_ADDR8, &M_ModeRegData);
 	
 	/*	  Read M_FLAG Register	  */
-	Pmic_ReadRegister(PmicConf_PmicDevice_PmicDevice_0, PMIC_MAIN_UNIT, PMIC_VR55XX_M_FLAG1_ADDR8, &read_m_flag1);
-	Pmic_ReadRegister(PmicConf_PmicDevice_PmicDevice_0, PMIC_MAIN_UNIT, PMIC_VR55XX_M_FLAG2_ADDR8, &read_m_flag2);
-	Pmic_ReadRegister(PmicConf_PmicDevice_PmicDevice_0, PMIC_MAIN_UNIT, PMIC_VR55XX_M_FLAG3_ADDR8, &read_m_flag3);
+	//Pmic_ReadRegister(PmicConf_PmicDevice_PmicDevice_0, PMIC_MAIN_UNIT, PMIC_VR55XX_M_FLAG1_ADDR8, &M_Flag1RegData);
+	//Pmic_ReadRegister(PmicConf_PmicDevice_PmicDevice_0, PMIC_MAIN_UNIT, PMIC_VR55XX_M_FLAG2_ADDR8, &read_m_flag2);
+	//Pmic_ReadRegister(PmicConf_PmicDevice_PmicDevice_0, PMIC_MAIN_UNIT, PMIC_VR55XX_M_FLAG3_ADDR8, &read_m_flag3);
 	
 	Pmic_ReadRegister(PmicConf_PmicDevice_PmicDevice_0, PMIC_MAIN_UNIT, PMIC_VR55XX_M_CFG_VPRE_2_OTP_ADDR8, &read_m_otp_vpre);
 	

@@ -18,6 +18,8 @@ extern "C" {
 #include "FreeRTOS.h"
 #include "task.h"
 
+#if (PICC_TRACE_ENABLE == 1U)
+
 /*==================================================================================================
  *                                         Global Variables
  *==================================================================================================*/
@@ -271,6 +273,8 @@ PICC_ChannelTrace_t* PICC_TraceGetChannel(uint8 channelId)
     (void)channelId;  /* Unused, kept for API compatibility */
     return &g_piccTrace;
 }
+
+#endif
 
 #if defined(__cplusplus)
 }

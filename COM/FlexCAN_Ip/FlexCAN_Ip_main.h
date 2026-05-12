@@ -19,7 +19,7 @@ extern "C" {
 
 #include "FlexCAN_Ip.h"
 #include "Mcal.h"
-#include "SOA_CANdbc_Generated.h"
+#include "CANdbc_Generated.h"
 
 /*==================================================================================================
  *                                         MACRO DEFINITIONS

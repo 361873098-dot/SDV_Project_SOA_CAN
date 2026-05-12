@@ -7,9 +7,9 @@
  *
  * Boot sequence:
  *   main()
- *   |-- PreOS: Hardware driver initialization (Clock, GPIO, SPI, I2C, PMIC)
- *   |-- PreOS: Communication initialization (FlexCAN, TJA1145, IPCF/PICC)
- *   +-- PostOS: OsTask_Creation_All() -> vTaskStartScheduler()
+ *   ├── PreOS: Hardware driver initialization (Clock, GPIO, SPI, I2C, PMIC)
+ *   ├── PreOS: Communication initialization (FlexCAN, TJA1145, IPCF/PICC)
+ *   └── PostOS: OsTask_Creation_All() → vTaskStartScheduler()
  */
 
 #ifdef __cplusplus
@@ -46,20 +46,17 @@ extern "C" {
 #include "pwsm.h"
 #include "soa_adapter_main.h"
 #include "diag_mgmt.h"
-
 /* FreeRTOS headers */
 #include "FreeRTOS.h"
 #include "task.h"
 #include "Mcu.h"
+#include "hm.h"
 
 #include <string.h>
 #include "System_Cpuload.h"
 
 /* Centralized task management */
 #include "Ostask_main.h"
-
-#include "hm.h"
-
 
 /** FlexCAN instance */
 #define FLEXCAN_INST 0U
@@ -78,9 +75,8 @@ static void App_Init_All(void)
   /* Register application-level PICC endpoints after middleware is ready. */
   Pwsm_Init();
   SoaAdapter_Init();
-  //DiagMgmt_Init();
+  DiagMgmt_Init();
   Hm_Init();
-  //OTA_Init();
 }
 
 /*==================================================================================================
@@ -92,15 +88,15 @@ static void App_Init_All(void)
  * @brief Application entry point
  *
  * Executes initialization in strict order:
- *   Phase 1 (PreOS): Hardware drivers -- no RTOS dependency
- *   Phase 2 (PreOS): Communication middleware -- creates IPCF softirq task
+ *   Phase 1 (PreOS): Hardware drivers — no RTOS dependency
+ *   Phase 2 (PreOS): Communication middleware — creates IPCF softirq task
  *                     (valid before scheduler) and registers callbacks
  *   Phase 3 (PreOS): Application initialization on top of middleware
  *   Phase 4 (PostOS): Creates application tasks and starts scheduler
  */
 int main(void) {
   /* ==================================================================
-   * Phase 1: PreOS -- Hardware & Driver Initialization
+   * Phase 1: PreOS — Hardware & Driver Initialization
    * ================================================================== */
 
   /* Initialize diagnostic subsystem (must be first, before any RTOS call) */
@@ -144,12 +140,12 @@ int main(void) {
   Spi_Baremetal_Tja1145_SetCanActive();
 
   /* ==================================================================
-   * Phase 2: PreOS -- Communication Middleware Initialization
+   * Phase 2: PreOS — Communication Middleware Initialization
    *
    * PICC_PreOS_Init() performs:
-   *   - Creates RX queue (xQueueCreate -- valid before scheduler)
+   *   - Creates RX queue (xQueueCreate — valid before scheduler)
    *   - Initializes IPCF driver (ipc_shm_init internally creates
-   *     softirq task via xTaskCreate -- valid before scheduler)
+   *     softirq task via xTaskCreate — valid before scheduler)
    *   - Initializes PICC channels, services, and link
    *   - Initializes power management module
    *   - Registers callbacks
@@ -157,7 +153,7 @@ int main(void) {
   PICC_PreOS_Init();
 
   /* ==================================================================
-    * Phase 3: PreOS -- Application Initialization
+    * Phase 3: PreOS — Application Initialization
     *
     * App_Init_All() performs:
     *   - Registers application-level communication endpoints
@@ -166,12 +162,12 @@ int main(void) {
     App_Init_All();
 
     /* ==================================================================
-    * Phase 4: PostOS -- Create Tasks & Start Scheduler
+    * Phase 4: PostOS — Create Tasks & Start Scheduler
    *
    * OsTask_Creation_All() creates:
    *   - OS_10ms    (priority 2): Unified periodic task
    *   - App_Rx_Msg (priority 3): IPCF RX queue processing
-   * Then calls vTaskStartScheduler() -- does NOT return.
+   * Then calls vTaskStartScheduler() — does NOT return.
    * ================================================================== */
   OsTask_Creation_All();
 

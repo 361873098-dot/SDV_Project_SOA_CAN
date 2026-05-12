@@ -39,14 +39,16 @@ REQUIRED_PYTHON_EXE = Path("C:/Users/RogPlus/AppData/Local/Programs/Python/Pytho
 #  Specify the absolute path to the input .dbc file here.
 #  If set to None, the script will auto-detect from SOA_DBC_File/ subfolder.
 # =====================================================================
-DEFAULT_DBC_FILE_PATH = Path(
-    r"D:\MySandbox\SDV_Project\IPCF_FreeRTOS_S32G399A_M7_Oring\Tools\CAN_Tools\SOA_DBC_File\CANdbc_file.dbc"
+BASE_PROJECT_DIR = Path(
+    r"D:\MySandbox\SDV_Project\IPCF_FreeRTOS_S32G399A_M7_Oring"
 )
 
-DEFAULT_OUTPUT_DIR = Path(
-    r"D:\My_SandBox\NXP_S32G_Asample\sw-prj-SDV_HPC_BSW_Mcore\IPCF_FreeRTOS_S32G399A_M7_Oring\SWC\Soa_Adapter"
+DEFAULT_DBC_FILE_PATH = (
+    BASE_PROJECT_DIR / "Tools" / "CAN_Tools" / "SOA_DBC_File" / "CANdbc_file.dbc"
 )
-DEFAULT_OUTPUT_BASENAME = "SOA_CANdbc_Generated"
+
+DEFAULT_OUTPUT_DIR = BASE_PROJECT_DIR / "COM" / "FlexCAN_Ip"
+DEFAULT_OUTPUT_BASENAME = "CANdbc_Generated"
 
 
 def validate_python_executable() -> None:
@@ -783,9 +785,8 @@ def generate_source(db, basename: str, node: str) -> str:
 #  Main
 # ===========================================================================
 
-def _auto_find_dbc(script_dir: Path) -> Path:
-    """Search for .dbc files in the SOA_DBC_File subfolder next to this script."""
-    dbc_dir = script_dir / "SOA_DBC_File"
+def _find_first_dbc_in_dir(dbc_dir: Path) -> Path:
+    """Return the first .dbc file found in the given directory."""
     if not dbc_dir.is_dir():
         print(f"ERROR: DBC folder not found: {dbc_dir}", file=sys.stderr)
         sys.exit(1)
@@ -796,6 +797,21 @@ def _auto_find_dbc(script_dir: Path) -> Path:
     if len(dbc_files) > 1:
         print(f"WARNING: Multiple .dbc files found, using the first one: {dbc_files[0].name}")
     return dbc_files[0]
+
+
+def _auto_find_dbc(script_dir: Path) -> Path:
+    """Search for .dbc files in the SOA_DBC_File subfolder next to this script."""
+    return _find_first_dbc_in_dir(script_dir / "SOA_DBC_File")
+
+
+def _resolve_dbc_path(path_value: Path, script_dir: Path) -> Path:
+    """Resolve a DBC path that may point to a file or to a directory."""
+    candidate = path_value.resolve()
+    if candidate.is_dir():
+        resolved = _find_first_dbc_in_dir(candidate)
+        print(f"[Auto] Resolved DBC from directory: {resolved}")
+        return resolved
+    return candidate
 
 
 def _auto_select_node(db) -> str:
@@ -837,9 +853,9 @@ def main():
 
     # --- Resolve DBC file path ---
     if args.dbc is not None:
-        dbc_path = Path(args.dbc).resolve()
+        dbc_path = _resolve_dbc_path(Path(args.dbc), script_dir)
     elif DEFAULT_DBC_FILE_PATH is not None:
-        dbc_path = DEFAULT_DBC_FILE_PATH.resolve()
+        dbc_path = _resolve_dbc_path(DEFAULT_DBC_FILE_PATH, script_dir)
         print(f"[Config] DBC file: {dbc_path}")
     else:
         dbc_path = _auto_find_dbc(script_dir)

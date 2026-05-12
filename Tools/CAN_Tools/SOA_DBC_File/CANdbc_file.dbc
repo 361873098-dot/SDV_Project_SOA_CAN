@@ -39,9 +39,11 @@ VAL_TABLE_ IGN_ST 1 "ON" 0 "OFF" ;
 VAL_TABLE_ Gear_state 7 "Invalid" 6 "Invalid" 5 "Invalid" 4 "Invalid" 3 "R" 2 "S" 1 "N" 0 "P" ;
 
 
+BO_ 3221225472 VECTOR__INDEPENDENT_SIG_MSG: 0 Vector__XXX
+ SG_ WorkVehicleModeSt : 0|8@0+ (1,0) [0|2] "" Vector__XXX
+
 BO_ 512 Standard_200_Rx: 8 SDV_Tester
  SG_ VehicleSpeed : 39|16@0+ (1,0) [0|400] "km/h" Vector__XXX
- SG_ WorkVehicleModeSt : 15|8@0+ (1,0) [0|2] "" Vector__XXX
  SG_ ParkingSts : 7|8@0+ (1,0) [0|4] "" Vector__XXX
  SG_ HighVoltageBatterySts : 23|16@0+ (0.01,0) [0|100] "%" Vector__XXX
 
@@ -51,6 +53,7 @@ BO_ 256 Standard_100_Tx: 2 SDV_M_CORE0
 
 
 
+CM_ BO_ 3221225472 "This is a message for not used signals, created by Vector CANdb++ DBC OLE DB Provider.";
 BA_DEF_ SG_  "GenSigStartValue" FLOAT 0 1215752192;
 BA_DEF_ BO_  "GenMsgSendType" ENUM  "Cycle","cycle","vector_leerstring","Event";
 BA_DEF_ BO_  "GenMsgCycleTime" INT 0 65535;
@@ -65,7 +68,7 @@ BA_ "GenMsgSendType" BO_ 512 0;
 BA_ "GenMsgCycleTime" BO_ 512 100;
 BA_ "GenMsgSendType" BO_ 256 0;
 BA_ "GenMsgCycleTime" BO_ 256 100;
-VAL_ 512 WorkVehicleModeSt 2 "OTA" 1 "OBD" 0 "Normal" ;
+VAL_ 3221225472 WorkVehicleModeSt 2 "OTA" 1 "OBD" 0 "Normal" ;
 VAL_ 512 ParkingSts 4 "Invalid" 3 "R" 2 "S" 1 "N" 0 "P" ;
 VAL_ 256 VehicleMode 2 "OTA" 1 "OBD" 0 "Normal" ;
 VAL_ 256 IgnitionSts 1 "ON" 0 "OFF" ;

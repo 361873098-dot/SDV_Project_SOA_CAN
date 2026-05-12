@@ -47,7 +47,7 @@ typedef struct
 } RealTimeInfo_st;
 
 
-typedef struct
+typedef struct __attribute__((packed))
 {
     uint8 ID[16];		/*故障唯一ID，各模块自行设计，ascii码形式*/
     uint32 Value[4];	/*最多4个32bits故障值，各个模块自行设计*/
@@ -59,7 +59,7 @@ typedef struct
     uint8 Reserved[3];
 }HealthHazard_st;
 
-typedef struct
+typedef struct __attribute__((packed))
 {
     uint8 Performance;/*性能，暂时未使用*/
     uint8 Reliability;/*可靠性，暂时未使用*/
@@ -69,7 +69,7 @@ typedef struct
     uint8 Reserved[3];
 }HealthIndicator_st;
 
-typedef struct
+typedef struct __attribute__((packed))
 {
     uint64 Timestamp; /*时间戳*/
     HealthIndicator_st Indicator; /*健康指标*/
@@ -80,7 +80,7 @@ typedef struct
     HealthHazard_st Hazards[10]; /*故障信息*/
 }HealthInfo_st;
 
-typedef struct
+typedef struct __attribute__((packed))
 {
     uint8   PartitionId;/*代表M核的Partition Id，目前是1*/            
     uint8   Reserved[3];                

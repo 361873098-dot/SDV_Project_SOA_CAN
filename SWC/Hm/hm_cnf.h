@@ -51,13 +51,33 @@
 
 #define HM_HB_METHOD_ID				(1U)	/*health management heart beat method ID*/
 #define HM_REPORTER_METHOD_ID				(3U)
+#define HM_FAULT_EVENT_ID                                (2U)
 
 #define A_CORE_PARTITION_ID			(4U)
 #define M_CORE_PARTITION_ID			(1U)
 
+/*	Category	*/
+#define HW_FAULT_CATEGORY_POWER                                (1U)
+#define HW_FAULT_CATEGORY_COMMUNICATION                        (2U)	
+
+/*	Severity	*/
+#define HM_SEVERITY_WARNING                              (1U)
+#define HM_SEVERITY_ERROR                                (2U)	
+
+/*	Detected By	*/
+#define HM_DETECTED_BY_POWER_MONITOR                           (1U)
+#define HM_DETECTED_BY_CAN_MONITOR                             (2U)
+
+
+#define HM_FAULT_MASK_KL30_OV                  (0x01U)
+#define HM_FAULT_MASK_KL30_UV                 (0x02U)
+#define HM_FAULT_MASK_CAN_BUS_OFF                        (0x04U)
+
+
 #define HM_HEARTBEAT_STARTUP_TIMEOUT	2000
 #define HM_HEARTBEAT_POOLING_TIMEOUT	2000
 
+#define HM_REPORT_FAULT_MAX_NUMBER	2
 typedef enum
 {
 	HM_HEARTBEAT_STATE_STARUP = ((uint8)0),
@@ -67,3 +87,6 @@ typedef enum
 } Hm_HeartBeat_MsgStateType;
 
 
+
+extern HealthHazard_st Hm_FaultEventIndex[HM_REPORT_FAULT_MAX_NUMBER];
+extern uint32 Hm_FaultEventMaskIndex[HM_REPORT_FAULT_MAX_NUMBER];

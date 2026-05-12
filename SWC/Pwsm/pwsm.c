@@ -110,7 +110,7 @@ void Pwsm_CommEvent(void)
         {
         	Pwsm_MsgState = PWSM_STATE_MSG_TX_ID1;
         }
-        else if (PICC_GetMethodData(PICC_APP_DIAG, PWR_METHOD_STATE_RESET, buf, sizeof(buf), &len, NULL, NULL, NULL) == PICC_E_OK)
+        else if (PICC_GetMethodData(PICC_APP_DIAG, PWR_METHOD_RST, buf, sizeof(buf), &len, NULL, NULL, NULL) == PICC_E_OK)
     	{
     		if (len == 2U && buf[0] == PWR_CORE_A &&  buf[1] == PWR_STATE_RESET)
     		{

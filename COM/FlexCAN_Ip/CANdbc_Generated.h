@@ -1,15 +1,15 @@
 /**
- * @file CANdbc_file.h
+ * @file CANdbc_Generated.h
  * @brief Auto-generated CAN message pack/unpack interface
  *
  * Generated from DBC by dbc_to_c_generator.py (cantools-based)
- * Date: 2026-04-24 13:09:19
+ * Date: 2026-05-12 14:38:17
  *
  * DO NOT EDIT — re-run the generator to update.
  */
 
-#ifndef CANDBC_FILE_H
-#define CANDBC_FILE_H
+#ifndef CANDBC_GENERATED_H
+#define CANDBC_GENERATED_H
 
 #include <stdint.h>
 #include <string.h>
@@ -48,13 +48,8 @@ typedef struct {
 #define STANDARD_200_RX_PARKING_STS_R  (3U)
 #define STANDARD_200_RX_PARKING_STS_INVALID  (4U)
 
-#define STANDARD_200_RX_WORK_VEHICLE_MODE_ST_NORMAL  (0U)
-#define STANDARD_200_RX_WORK_VEHICLE_MODE_ST_OBD  (1U)
-#define STANDARD_200_RX_WORK_VEHICLE_MODE_ST_OTA  (2U)
-
 typedef struct {
     uint8_t    ParkingSts;  /* [0, 4] */
-    uint8_t    WorkVehicleModeSt;  /* [0, 2] */
     uint16_t   HighVoltageBatterySts;  /* factor=0.01, offset=0, unit="%", [0, 100] */
     uint16_t   VehicleSpeed;  /* unit="km/h", [0, 400] */
 } Standard_200_Rx_t;
@@ -78,7 +73,7 @@ typedef struct {
 /** Number of entries in the dispatch table */
 #define DBC_MESSAGE_TABLE_COUNT  (2U)
 
-/** Auto-generated dispatch table (defined in CANdbc_file.c) */
+/** Auto-generated dispatch table (defined in CANdbc_Generated.c) */
 extern const Dbc_MessageHandlerType g_dbcMessageTable[DBC_MESSAGE_TABLE_COUNT];
 
 /**
@@ -110,4 +105,4 @@ int Standard_Rx_unpack(uint32_t CAN_ID, void *msg, const uint8_t *data, uint8_t 
 extern Standard_100_Tx_t g_tx_Standard_100_Tx;  /**< TX 0x100 - DLC=2 */
 extern Standard_200_Rx_t g_rx_Standard_200_Rx;  /**< RX 0x200 - DLC=8 */
 
-#endif /* CANDBC_FILE_H */
+#endif /* CANDBC_GENERATED_H */

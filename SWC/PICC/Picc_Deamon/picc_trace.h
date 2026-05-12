@@ -23,6 +23,11 @@ extern "C" {
  *                                         Macro Definitions
  *==================================================================================================*/
 
+/** Global trace switch: 0=disabled, 1=enabled */
+#ifndef PICC_TRACE_ENABLE
+#define PICC_TRACE_ENABLE    (0U)
+#endif
+
 /** Maximum data columns per trace entry (increased to capture full stacked packets) */
 #define PICC_TRACE_MAX_COLS    (32U)
 
@@ -73,7 +78,10 @@ typedef struct {
  * g_piccTrace.rx.data[row][2..] = RX data
  * g_piccTrace.rx.writeIndex = current write position
  */
+/* Trace storage is only exposed when trace is enabled. */
+#if (PICC_TRACE_ENABLE == 1U)
 extern PICC_ChannelTrace_t g_piccTrace;
+#endif
 
 /*==================================================================================================
  *                                         Function Declarations
@@ -82,6 +90,8 @@ extern PICC_ChannelTrace_t g_piccTrace;
 /**
  * @brief Initialize trace module
  */
+#if (PICC_TRACE_ENABLE == 1U)
+
 void PICC_TraceInit(void);
 
 /**
@@ -114,6 +124,16 @@ void PICC_TraceClear(void);
  * @return Pointer to trace structure
  */
 PICC_ChannelTrace_t* PICC_TraceGetChannel(uint8 channelId);
+
+#else
+
+#define PICC_TraceInit()                         ((void)0)
+#define PICC_TraceTx(channelId, data, len)       ((void)(channelId), (void)(data), (void)(len))
+#define PICC_TraceRx(channelId, data, len)       ((void)(channelId), (void)(data), (void)(len))
+#define PICC_TraceClear()                        ((void)0)
+#define PICC_TraceGetChannel(channelId)          ((void)(channelId), (PICC_ChannelTrace_t *)0)
+
+#endif
 
 #if defined(__cplusplus)
 }

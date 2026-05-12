@@ -64,10 +64,8 @@ extern "C"{
 
 /** Method IDs */
 #define PWR_METHOD_STATE_ACK        (2U)    /**< State acknowledgement */
-#define PWR_METHOD_STATE_RESET        (10U)    /**< State acknowledgement */
-
-
 #define PWR_METHOD_EVENT_DONE       (8U)    /**< Phase 1 completion */
+#define PWR_METHOD_RST				(10U)
 #define PWR_METHOD_CTRL_ACK         (11U)   /**< Control command ack */
 
 /**

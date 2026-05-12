@@ -28,7 +28,7 @@ extern "C" {
 #include "FlexCAN_Ip.h"
 #include "Mcal.h"
 #include "TJA1145A_Spi_Baremetal.h"
-#include "SOA_CANdbc_Generated.h"
+#include "CANdbc_Generated.h"
 
 
 
@@ -111,23 +111,7 @@ static unsigned char FlexCAN_GetTxMsgIdByMbx(uint8 Mbx, uint32 *msgId) {
   return AINFC_CAN_ERROR;
 }
 
-static unsigned char FlexCAN_GetRxMsgIdByMbx(uint8 Mbx, uint32 *msgId) {
-  if (msgId == (uint32 *)0) {
-    return AINFC_CAN_ERROR;
-  }
 
-  if (Mbx == AINFC_RX_MB0) {
-    *msgId = g_rxMsgId[0];
-    return AINFC_CAN_OK;
-  }
-
-  if (Mbx == AINFC_RX_MB1) {
-    *msgId = g_rxMsgId[1];
-    return AINFC_CAN_OK;
-  }
-
-  return AINFC_CAN_ERROR;
-}
 
 /**
  * @brief Reverse lookup: find TX MB index from CAN message ID

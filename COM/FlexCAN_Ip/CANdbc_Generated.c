@@ -1,14 +1,14 @@
 /**
- * @file SOA_CANdbc_Generated.c
+ * @file CANdbc_Generated.c
  * @brief Auto-generated CAN message pack/unpack implementation
  *
  * Generated from DBC by dbc_to_c_generator.py (cantools-based)
- * Date: 2026-04-24 17:53:02
+ * Date: 2026-05-12 14:38:17
  *
  * DO NOT EDIT — re-run the generator to update.
  */
 
-#include "SOA_CANdbc_Generated.h"
+#include "CANdbc_Generated.h"
 
 /* ====================================================================== */
 /*  Global message struct instances                                     */
@@ -51,12 +51,6 @@ static int Standard_200_Rx_unpack(Standard_200_Rx_t *msg, const uint8_t *data, u
         uint8_t raw_val = 0u;
         raw_val |= data[0];
         msg->ParkingSts = (uint8_t)raw_val;
-    }
-    /* WorkVehicleModeSt */
-    {
-        uint8_t raw_val = 0u;
-        raw_val |= data[1];
-        msg->WorkVehicleModeSt = (uint8_t)raw_val;
     }
     /* HighVoltageBatterySts */
     {

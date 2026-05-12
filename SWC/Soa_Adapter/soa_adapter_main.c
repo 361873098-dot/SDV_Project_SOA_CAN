@@ -24,7 +24,7 @@ extern "C"{
 #include "soa_adapter_main.h"
 #include "soa_adapter_cnf.h"
 #include "FlexCAN_Ip_main.h"
-#include "SOA_CANdbc_Generated.h"
+#include "CANdbc_Generated.h"
 #include "picc_api.h"
 
 #include <string.h>

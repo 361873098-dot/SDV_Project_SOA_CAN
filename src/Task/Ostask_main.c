@@ -9,7 +9,7 @@
  *   - Event-driven (queue/notification blocking) tasks remain as independent FreeRTOS
  *     tasks but are created here for centralized visibility
  *   - Future business modules only need to add one function call to the appropriate
- *     period group -- no new FreeRTOS task or stack allocation required
+ *     period group — no new FreeRTOS task or stack allocation required
  *
  * Task creation overview (OsTask_Creation_All):
  *   +------------------+----------+--------------+-------------------------------+
@@ -20,7 +20,7 @@
  *   +------------------+----------+--------------+-------------------------------+
  *
  * Note: softirq task (priority 4, 256 Words) is created internally by
- *       ipc_shm_init() in IPCF driver -- NOT managed here.
+ *       ipc_shm_init() in IPCF driver — NOT managed here.
  */
 
 #if defined(__cplusplus)
@@ -39,20 +39,18 @@ extern "C"{
 #include "Ostask_main.h"
 
 /* Application module headers - for periodic Runnables */
-#include "FlexCAN_Ip_main.h"        /* FlexCAN_Process_Init()                   */
+#include "FlexCAN_Ip_main.h"        /* AINFC_Can_Cyclic_10ms()                   */
 #include "soa_adapter_main.h"             /* SoaAdapter_Main()                        */
 #include "TJA1145A_Spi_Baremetal.h"  /* Spi_Baremetal_Tja1145_PeriodicTest()     */
 #include "picc_stack.h"              /* PICC_StackProcess()                      */
 #include "picc_heartbeat.h"          /* PICC_HeartbeatProcess()                  */
 #include "picc_link.h"               /* PICC_LinkProcess()                       */
 #include "pwsm.h"                    /* Pwsm_Main()                             */
-#include "diag_mgmt.h"               /* DiagMgmt_Main()                         */
 #include "System_Cpuload.h"          /* EcuM_Diag_Update()                       */
-
+#include "diag_mgmt.h"
 /* Event-driven task declaration */
 #include "Picc_main.h"               /* App_Rx_Msg_10ms_Task()                  */
 #include "hm.h"
-
 /*==================================================================================================
  *                                         MACRO DEFINITIONS
  *==================================================================================================*/
@@ -143,20 +141,22 @@ void TASK_M0_10MS(void)
     /* PICC Link: Handle connection requests (Client mode) */
     PICC_LinkProcess();
 
-    /* SOA Adapter: Notifier change detection + Getter/Setter request handling */
+    /* SOA Adapter: CAN signal bridge and IPCF SOA service processing */
     SoaAdapter_Main();
 
     /* Power State Machine */
     Pwsm_Main();
 
-    /* Diagnostic Management: DoIP activation line status (30ms period) */
-   // DiagMgmt_Main();
-	Hm_Main();
+    DiagMgmt_Main();
 
-#if (PICC_DIAG_RECORD_ENABLE == 1U)
-    /* Update link state diagnostics (appLinkState + channelLinkState) */
-    PICC_DiagUpdateLinkState();
-#endif
+    Hm_Main();
+
+	#if(PICC_DIAG_RECORD_ENABLE==1U)
+	{
+		PICC_DiagUpdateLinkState();
+	}
+
+	#endif
 }
 
 /**
