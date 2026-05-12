@@ -404,6 +404,30 @@ def generate_header(db, basename: str, node: str) -> str:
                 f"  /**< RX 0x{msg.frame_id:03X} - DLC={msg.length} */"
             )
     lines.append(f"")
+
+    # ---------------------------------------------------------------
+    #  Per-signal getter function declarations
+    # ---------------------------------------------------------------
+    lines.append(f"/* " + "=" * 70 + " */")
+    lines.append(f"/*  Signal getter function declarations                                 */")
+    lines.append(f"/* " + "=" * 70 + " */")
+    lines.append(f"")
+    for msg in sorted(db.messages, key=lambda m: m.frame_id):
+        msg_is_tx = is_tx(msg, node)
+        msg_is_rx = is_rx(msg, node)
+        if not (msg_is_tx or msg_is_rx):
+            continue
+        dtag = direction_tag(msg, node)
+        lines.append(f"/* --- {msg.name} (0x{msg.frame_id:03X}, {dtag}) --- */")
+        for sig in msg.signals:
+            ctype = c_type_for_signal(sig)
+            # Use TX prefix if TX, else RX
+            if msg_is_tx:
+                lines.append(f"{ctype} Can_Get_signal_{sig.name}(void);")
+            elif msg_is_rx:
+                lines.append(f"{ctype} Can_Get_signal_{sig.name}(void);")
+        lines.append(f"")
+
     lines.append(f"#endif /* {guard} */")
     lines.append(f"")
     return "\n".join(lines)
@@ -777,6 +801,37 @@ def generate_source(db, basename: str, node: str) -> str:
     lines.append(f"    return -1;  /* CAN_ID not found */")
     lines.append(f"}}")
     lines.append(f"")
+
+    # ------------------------------------------------------------------
+    # Per-signal getter functions
+    # ------------------------------------------------------------------
+    lines.append(f"/* " + "=" * 70 + " */")
+    lines.append(f"/*  Per-signal getter functions                                         */")
+    lines.append(f"/* " + "=" * 70 + " */")
+    lines.append(f"")
+
+    for msg in sorted(db.messages, key=lambda m: m.frame_id):
+        msg_is_tx = is_tx(msg, node)
+        msg_is_rx = is_rx(msg, node)
+        if not (msg_is_tx or msg_is_rx):
+            continue
+
+        dtag = direction_tag(msg, node)
+        lines.append(f"/* --- {msg.name} (0x{msg.frame_id:03X}, {dtag}) --- */")
+
+        for sig in msg.signals:
+            ctype = c_type_for_signal(sig)
+            # Determine global struct prefix: TX uses g_tx_, RX uses g_rx_
+            if msg_is_tx:
+                global_var = f"g_tx_{msg.name}"
+            else:
+                global_var = f"g_rx_{msg.name}"
+
+            lines.append(f"{ctype} Can_Get_signal_{sig.name}(void)")
+            lines.append(f"{{")
+            lines.append(f"    return ({global_var}.{sig.name});")
+            lines.append(f"}}")
+            lines.append(f"")
 
     return "\n".join(lines)
 

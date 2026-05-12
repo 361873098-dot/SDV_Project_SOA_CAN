@@ -3,7 +3,7 @@
  * @brief Auto-generated CAN message pack/unpack interface
  *
  * Generated from DBC by dbc_to_c_generator.py (cantools-based)
- * Date: 2026-05-12 14:38:17
+ * Date: 2026-05-12 18:13:37
  *
  * DO NOT EDIT — re-run the generator to update.
  */
@@ -104,5 +104,18 @@ int Standard_Rx_unpack(uint32_t CAN_ID, void *msg, const uint8_t *data, uint8_t 
 
 extern Standard_100_Tx_t g_tx_Standard_100_Tx;  /**< TX 0x100 - DLC=2 */
 extern Standard_200_Rx_t g_rx_Standard_200_Rx;  /**< RX 0x200 - DLC=8 */
+
+/* ====================================================================== */
+/*  Signal getter function declarations                                 */
+/* ====================================================================== */
+
+/* --- Standard_100_Tx (0x100, TX) --- */
+uint8_t Can_Get_signal_IgnitionSts(void);
+uint8_t Can_Get_signal_VehicleMode(void);
+
+/* --- Standard_200_Rx (0x200, RX) --- */
+uint8_t Can_Get_signal_ParkingSts(void);
+uint16_t Can_Get_signal_HighVoltageBatterySts(void);
+uint16_t Can_Get_signal_VehicleSpeed(void);
 
 #endif /* CANDBC_GENERATED_H */
