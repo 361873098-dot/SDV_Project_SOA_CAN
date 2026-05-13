@@ -45,7 +45,7 @@ uint16 SOA_ReadVehicleSpeed(uint8 *outBuf, uint16 maxLen)
     {
         return 0U;
     }
-    uint16_t speed = Can_Get_signal_VehicleSpeed();
+    uint16_t speed = Can_Get_Rx_signal_VehicleSpeed();
     outBuf[0] = (uint8)(speed >> 8U);
     outBuf[1] = (uint8)(speed & 0xFFU);
     return 2U;
@@ -64,7 +64,7 @@ uint16 SOA_ReadWorkVehicleMode(uint8 *outBuf, uint16 maxLen)
     {
         return 0U;
     }
-    outBuf[0] = (uint8)Can_Get_signal_VehicleMode();
+    outBuf[0] = (uint8)Can_R_W_signal_VehicleMode(NULL);
     return 1U;
 }
 
@@ -80,7 +80,7 @@ uint16 SOA_ReadParkingSts(uint8 *outBuf, uint16 maxLen)
     {
         return 0U;
     }
-    outBuf[0] = (uint8)Can_Get_signal_ParkingSts();
+    outBuf[0] = (uint8)Can_Get_Rx_signal_ParkingSts();
     return 1U;
 }
 
@@ -96,7 +96,7 @@ uint16 SOA_ReadHighVoltageBatterySts(uint8 *outBuf, uint16 maxLen)
     {
         return 0U;
     }
-    uint16_t hvBatt = Can_Get_signal_HighVoltageBatterySts();
+    uint16_t hvBatt = Can_Get_Rx_signal_HighVoltageBatterySts();
     outBuf[0] = (uint8)(hvBatt >> 8U);
     outBuf[1] = (uint8)(hvBatt & 0xFFU);
     return 2U;
@@ -114,7 +114,7 @@ uint16 SOA_ReadIgnitionSts(uint8 *outBuf, uint16 maxLen)
     {
         return 0U;
     }
-    outBuf[0] = (uint8)Can_Get_signal_IgnitionSts();
+    outBuf[0] = (uint8)Can_R_W_signal_IgnitionSts(NULL);
     return 1U;
 }
 
@@ -134,7 +134,8 @@ uint8 SOA_WriteVehicleMode(const uint8 *inBuf, uint16 len)
     {
         return 1U;  /* Error */
     }
-    g_tx_Standard_100_Tx.VehicleMode = inBuf[0];
+    uint8_t mode = inBuf[0];
+    Can_R_W_signal_VehicleMode(&mode);
     return 0U;  /* Success */
 }
 
