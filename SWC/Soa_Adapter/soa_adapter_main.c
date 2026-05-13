@@ -530,8 +530,8 @@ void SoaAdapter_Main(void)
     /* 6. Poll and handle Getter/Setter requests from A-Core */
     SOA_PollMethodRequests();
 
-    /* 7. Process CAN TX (send updated DBC struct values onto the bus) */
-    SoaAdapter_CanTxProcess();
+    /* 7. Process CAN TX (send updated DBC struct values onto the bus) DBC no can TX message config */
+  //  SoaAdapter_CanTxProcess();
 }
 
 /**

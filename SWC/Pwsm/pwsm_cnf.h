@@ -187,6 +187,21 @@ extern void Pwsm_EthSwitchRst(uint8 Level);
 extern void Pwsm_ResetMsgState(void);
 
 
+/***********************************************************************************************************************
+ *  Function name    : Pwsm_TstVehicleMode()
+ *
+ *  Description      : SOA Test variable 
+ *
+ *  List of arguments: none
+ *
+ *  Return value     : VehicleMode: vehic mode
+ *
+ ***********************************************************************************************************************/
+
+
+extern	uint8 Pwsm_TstVehicleMode(uint8* VehicleMode);
+
+
 #if defined(__cplusplus)
 }
 #endif

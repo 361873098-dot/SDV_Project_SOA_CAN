@@ -25,6 +25,7 @@ extern "C"{
 
 #include "soa_adapter_cnf.h"
 #include "CANdbc_Generated.h"   /* DBC global structs */
+#include "pwsm_cnf.h"
 
 /*==================================================================================================
  *                              SIGNAL READ FUNCTIONS (Notifier + Getter)
@@ -64,7 +65,8 @@ uint16 SOA_ReadWorkVehicleMode(uint8 *outBuf, uint16 maxLen)
     {
         return 0U;
     }
-    outBuf[0] = (uint8)Can_R_W_signal_VehicleMode(NULL);
+    outBuf[0] = (uint8)Pwsm_TstVehicleMode(NULL);
+	
     return 1U;
 }
 
@@ -114,7 +116,7 @@ uint16 SOA_ReadIgnitionSts(uint8 *outBuf, uint16 maxLen)
     {
         return 0U;
     }
-    outBuf[0] = (uint8)Can_R_W_signal_IgnitionSts(NULL);
+    outBuf[0] = (uint8)Can_Get_Rx_signal_IgnitionSts();
     return 1U;
 }
 
@@ -135,7 +137,9 @@ uint8 SOA_WriteVehicleMode(const uint8 *inBuf, uint16 len)
         return 1U;  /* Error */
     }
     uint8_t mode = inBuf[0];
-    Can_R_W_signal_VehicleMode(&mode);
+    Pwsm_TstVehicleMode(&mode);
+
+   
     return 0U;  /* Success */
 }
 

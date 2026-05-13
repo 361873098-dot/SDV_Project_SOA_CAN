@@ -3,7 +3,7 @@
  * @brief Auto-generated CAN message pack/unpack implementation
  *
  * Generated from DBC by dbc_to_c_generator.py (cantools-based)
- * Date: 2026-05-13 13:11:27
+ * Date: 2026-05-13 13:40:32
  *
  * DO NOT EDIT — re-run the generator to update.
  */
@@ -27,16 +27,6 @@ static int Standard_100_Tx_pack(uint8_t *data, const Standard_100_Tx_t *msg, uin
 
     (void)memset(data, 0, (size_t)2U);
 
-    /* IgnitionSts: start_bit=7, len=8, Motorola */
-    {
-        uint8_t raw_val = (uint8_t)msg->IgnitionSts;
-        data[0] = (uint8_t)raw_val;
-    }
-    /* VehicleMode: start_bit=15, len=8, Motorola */
-    {
-        uint8_t raw_val = (uint8_t)msg->VehicleMode;
-        data[1] = (uint8_t)raw_val;
-    }
 
     return 0;
 }
@@ -51,6 +41,12 @@ static int Standard_200_Rx_unpack(Standard_200_Rx_t *msg, const uint8_t *data, u
         uint8_t raw_val = 0u;
         raw_val |= data[0];
         msg->ParkingSts = (uint8_t)raw_val;
+    }
+    /* IgnitionSts */
+    {
+        uint8_t raw_val = 0u;
+        raw_val |= data[1];
+        msg->IgnitionSts = (uint8_t)raw_val;
     }
     /* HighVoltageBatterySts */
     {
@@ -144,38 +140,15 @@ int Standard_Rx_unpack(uint32_t CAN_ID, void *msg, const uint8_t *data, uint8_t 
 /* ====================================================================== */
 
 /* --- Standard_100_Tx (0x100, TX) --- */
-/* --- Standard_100_Tx (0x100, TX) --- if *IgnitionSts is NULL this function is read else it's write */
-uint8_t Can_R_W_signal_IgnitionSts(uint8_t* IgnitionSts)
-{
-    if(IgnitionSts == NULL)
-    {
-        return (g_tx_Standard_100_Tx.IgnitionSts);
-    }
-    else
-    {
-        g_tx_Standard_100_Tx.IgnitionSts = *IgnitionSts;
-        return (g_tx_Standard_100_Tx.IgnitionSts);
-    }
-}
-
-/* --- Standard_100_Tx (0x100, TX) --- if *VehicleMode is NULL this function is read else it's write */
-uint8_t Can_R_W_signal_VehicleMode(uint8_t* VehicleMode)
-{
-    if(VehicleMode == NULL)
-    {
-        return (g_tx_Standard_100_Tx.VehicleMode);
-    }
-    else
-    {
-        g_tx_Standard_100_Tx.VehicleMode = *VehicleMode;
-        return (g_tx_Standard_100_Tx.VehicleMode);
-    }
-}
-
 /* --- Standard_200_Rx (0x200, RX) --- */
 uint8_t Can_Get_Rx_signal_ParkingSts(void)
 {
     return (g_rx_Standard_200_Rx.ParkingSts);
+}
+
+uint8_t Can_Get_Rx_signal_IgnitionSts(void)
+{
+    return (g_rx_Standard_200_Rx.IgnitionSts);
 }
 
 uint16_t Can_Get_Rx_signal_HighVoltageBatterySts(void)

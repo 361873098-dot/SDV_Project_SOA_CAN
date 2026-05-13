@@ -33,6 +33,8 @@
 #include "Dio.h"
 
 
+uint8 VehMod =0;
+
 /***********************************************************************************************************************
  *  Function name    : Pwsm_WriteWakeup()
  *
@@ -81,4 +83,22 @@ void Pwsm_EthSwitchRst(uint8 Level)
 {
 	Dio_WriteChannel(DioConf_DioChannel_EthSwitchRst, Level);
 }
+
+
+/***********************************************************************************************************************
+ *  Function name    : Pwsm_TstVehicleMode()
+ *
+ *  Description      : SOA Test variable 
+ *
+ *  List of arguments: none
+ *
+ *  Return value     : VehicleMode: vehic mode
+ *
+ ***********************************************************************************************************************/
+
+uint8 Pwsm_TstVehicleMode(uint8* VehicleMode)
+{
+    return  (VehicleMode == NULL) ? VehMod : (VehMod = *VehicleMode);
+}
+
 
