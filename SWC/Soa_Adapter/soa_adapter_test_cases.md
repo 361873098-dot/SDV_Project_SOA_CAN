@@ -17,12 +17,12 @@
 | DriSpeedSt | [0] | Notifier | VehicleSpeed | `g_rx_Standard_200_Rx` (RX 0x200) |
 | ParkingSt | [1] | Getter | ParkingSts | `g_rx_Standard_200_Rx` (RX 0x200) |
 | HVBatterySt | [2] | Getter | HighVoltageBatterySts | `g_rx_Standard_200_Rx` (RX 0x200) |
-| IgnitionSt | [3] | Getter | IgnitionSts | `g_tx_Standard_100_Tx` (TX 0x100) |
-| VehicleMode | [4] | Setter | VehicleMode | `g_tx_Standard_100_Tx` (TX 0x100) |
-| VehicleModeSt | [5] | Notifier | VehicleMode | `g_tx_Standard_100_Tx` (TX 0x100) |
+| IgnitionSt | [3] | Getter | IgnitionSts | `g_rx_Standard_200_Rx` (RX 0x200) |
+| VehicleMode | [4] | Setter | VehicleMode | `Pwsm_TstVehicleMode` (PWSM module) |
+| VehicleModeSt | [5] | Notifier | VehicleMode | `Pwsm_TstVehicleMode` (PWSM module) |
 
 > [!IMPORTANT]
-> Entry [5] Notifier reads from the **same TX variable** that Entry [4] Setter writes to (`g_tx_Standard_100_Tx.VehicleMode`), NOT from RX feedback. When Setter writes a new value, Notifier change detection will detect it and notify A-Core.
+> Entry [5] Notifier reads from the **same PWSM state** that Entry [4] Setter writes to (via `Pwsm_TstVehicleMode`), NOT from RX feedback. When Setter writes a new value, Notifier change detection will detect it and notify A-Core.
 
 ## Byte Layout Reference
 
@@ -48,7 +48,7 @@ When PICC link transitions from DISCONNECTED to CONNECTED, M-Core calls `SOA_Sen
 ### Preconditions
 - Link state = `DISCONNECTED`
 - `g_rx_Standard_200_Rx.VehicleSpeed = 0x0064` (100 km/h)
-- `g_tx_Standard_100_Tx.VehicleMode = 0x00` (Normal)
+- `Pwsm_TstVehicleMode` returns `0x00` (Normal)
 
 ### Input Trigger
 - Link state changes to `CONNECTED`
@@ -92,7 +92,7 @@ Detail breakdown:
 | SOA_SessionID | `00 00` | Always 0 |
 | SOA_ReturnCode | `00 00` | OK |
 | SOA_Length | `00 01` | 1 byte |
-| Data | `00` | Normal mode (from TX struct) |
+| Data | `00` | Normal mode (from PWSM state) |
 
 ### Pass Criteria
 - **Only 1** `PICC_SendEvent()` call made (batched), total payload length = 27
@@ -175,7 +175,7 @@ Sent via: `PICC_SendEvent(PICC_APP_SOA, 3, s_soaTxBuf, 14, PICC_EVENT_WITHOUT_AC
 ## TC-06: Getter Request — IgnitionSts (ServiceID=0x0004)
 
 ### Preconditions
-- `g_tx_Standard_100_Tx.IgnitionSts = 0x01` (ON)
+- `g_rx_Standard_200_Rx.IgnitionSts = 0x01` (ON)
 
 ### Input — A-Core REQUEST
 ```
@@ -188,7 +188,7 @@ Sent via: `PICC_SendEvent(PICC_APP_SOA, 3, s_soaTxBuf, 14, PICC_EVENT_WITHOUT_AC
 ```
 
 > [!NOTE]
-> IgnitionSts reads from TX struct `g_tx_Standard_100_Tx`, not RX.
+> IgnitionSts reads from RX struct `g_rx_Standard_200_Rx`.
 
 ---
 
@@ -199,7 +199,7 @@ Verify Setter writes to TX struct and returns current value via linked Notifier 
 
 ### Preconditions
 - Link = `CONNECTED`
-- `g_tx_Standard_100_Tx.VehicleMode = 0x00` (Normal, before Setter)
+- `Pwsm_TstVehicleMode` returns `0x00` (Normal, before Setter)
 
 ### Input — A-Core Setter REQUEST
 ```
@@ -216,9 +216,9 @@ Verify Setter writes to TX struct and returns current value via linked Notifier 
 
 ### Expected Behavior
 1. `SOA_FindService(0x0005, 0x5001, 0x0001)` → index 4 (Setter)
-2. Entry [4] `SOA_WriteVehicleMode(&reqData[12], 1)` → `g_tx_Standard_100_Tx.VehicleMode = 0x02`, returns 0
+2. Entry [4] `SOA_WriteVehicleMode(&reqData[12], 1)` → calls `Pwsm_TstVehicleMode(&mode)` to set state to `0x02`, returns 0
 3. `hasLinkedNotifier = TRUE` → lookup Entry [5] via `linkedNotifierIdx = 5`
-4. Entry [5] `SOA_ReadWorkVehicleMode()` → reads `g_tx_Standard_100_Tx.VehicleMode = 0x02`
+4. Entry [5] `SOA_ReadWorkVehicleMode()` → reads state `0x02` via `Pwsm_TstVehicleMode(NULL)`
 
 ### Expected Response
 ```
@@ -230,14 +230,14 @@ Verify Setter writes to TX struct and returns current value via linked Notifier 
 | SOA_SessionID | `00 04` | Echoed |
 | SOA_ReturnCode | `00 00` | Success |
 | SOA_Length | `00 01` | 1 byte |
-| Data | `02` | **Current VehicleMode from TX struct (= written value)** |
+| Data | `02` | **Current VehicleMode from PWSM state (= written value)** |
 
 > [!IMPORTANT]
-> The response reads from the **same TX variable** that was just written. So the response data (`02`) will always match the written value.
+> The response reads from the **same PWSM state** that was just written. So the response data (`02`) will always match the written value.
 
 ### Pass Criteria
-- `g_tx_Standard_100_Tx.VehicleMode` updated to `0x02`
-- Response data = `02` (read via linked Notifier [5] from TX struct)
+- PWSM VehicleMode state updated to `0x02`
+- Response data = `02` (read via linked Notifier [5] from PWSM module)
 - IPC SessionID echoed
 - `PICC_MethodResponse()` called with `ipcReturnCode = 0x00`
 
@@ -291,7 +291,7 @@ After disconnect → reconnect, `SOA_SendAllNotifierInitValues()` re-sends all N
 ### Preconditions
 - Previous state: `DISCONNECTED` (cache invalid, `isValid = FALSE`)
 - `g_rx_Standard_200_Rx.VehicleSpeed = 0x012C` (300 km/h)
-- `g_tx_Standard_100_Tx.VehicleMode = 0x02` (OTA)
+- `Pwsm_TstVehicleMode` returns `0x02` (OTA)
 
 ### Expected Output — Single Batched IPC Payload
 
@@ -334,7 +334,7 @@ PICC_SendEvent(PICC_APP_SOA, 3, s_soaBatchBuf, 27, PICC_EVENT_WITHOUT_ACK)
 | SOA_Length | `00 00` | No data |
 
 - `PICC_MethodResponse()` called with `ipcReturnCode = 0x01`
-- `g_tx_Standard_100_Tx.VehicleMode` **NOT changed**
+- PWSM VehicleMode state **NOT changed**
 
 ---
 
@@ -438,11 +438,11 @@ Verify `SOA_HandleMethodRequest` silently discards requests with less than 12 by
 | TC-03 | Notifier unchanged | No transmission |
 | TC-04 | Getter ParkingSts | SessionID echoed, data from RX |
 | TC-05 | Getter HVBattery | 2B Big-Endian uint16 from RX |
-| TC-06 | Getter IgnitionSts | Data from **TX** struct |
-| TC-07 | Setter VehicleMode | Writes TX, reads back via linked Notifier [5] `SOA_ReadWorkVehicleMode()` |
+| TC-06 | Getter IgnitionSts | Data from **RX** struct |
+| TC-07 | Setter VehicleMode | Writes PWSM state, reads back via linked Notifier [5] `SOA_ReadWorkVehicleMode()` |
 | TC-08 | Unknown ServiceID | ReturnCode = 0x01, ipcReturnCode = 0x01 |
 | TC-09 | Disconnect | Cache invalidated, no traffic |
-| TC-10 | Reconnect (batched) | **Single** batched re-sync, VehicleModeSt from **TX** |
+| TC-10 | Reconnect (batched) | **Single** batched re-sync, VehicleModeSt from **PWSM state** |
 | TC-11 | Setter empty data | Write not attempted, fails gracefully |
 | TC-12 | Pre-link | Early return, no processing |
 | TC-13 | Notifier as Method | Default branch → E_NOT_OK |
