@@ -4,7 +4,7 @@
 |------|------|
 | 模块名称 | SOA Adapter |
 | 版本 | 1.0 |
-| 日期 | 2026-05-07 |
+| 日期 | 2026-05-13 |
 | 适用平台 | S32G399A M7 Core (FreeRTOS) |
 
 ---
@@ -37,7 +37,7 @@ CAN Bus <-> DBC Structs <-> SOA Adapter <-> PICC API <-> IPCF <-> A-Core
 |----------|------|
 | `picc_api.h` | PICC 驱动公共 API（Init、SendEvent、MethodResponse、GetMethodData 等） |
 | `FlexCAN_Ip_main.h` | CAN 收发接口 |
-| `SOA_CANdbc_Generated.h` | DBC 生成的 CAN 信号全局结构体 |
+| `CANdbc_Generated.h` / `pwsm_cnf.h` | DBC 生成的 CAN 信号访问接口 / VehicleMode PWSM 状态访问 |
 | `Platform.h` | 平台基础类型定义（uint8、uint16、sint8、boolean 等） |
 
 ### 2.3 PICC 注册配置
@@ -89,9 +89,9 @@ typedef struct {
 } SOA_Header_t;
 ```
 
-### 3.3 IPC 层固定 ID 映射
+### 3.3 IPCF 层固定 ID 映射
 
-| SOA 业务类型 | IPC 层 ID | IPC MessageType |
+| SOA 业务类型 | IPCF 层 ID | IPCF MessageType |
 |-------------|-----------|-----------------|
 | 所有 Notifier/Event（M→A） | EventID = 3 | 0x09 (NOTIFICATION_WITHOUT_ACK) |
 | 所有 Getter/Setter/Method（A→M→A） | MethodID = 1 | 0x05 (REQUEST) → 0x80 (RESPONSE) |
@@ -104,12 +104,12 @@ typedef struct {
 
 | 索引 | 服务接口名 | ServiceID | MethodID | InstanceID | 类型 | 数据源 | 大小 |
 |------|-----------|-----------|----------|------------|------|--------|------|
-| 0 | Atom_VCU_DriSpeedSt | 0x0001 | 0x8001 | 0x0001 | Notifier | `g_rx_Standard_200_Rx.VehicleSpeed` | 2B |
-| 1 | Atom_VCU_ParkingSt | 0x0002 | 0x5001 | 0x0001 | Getter | `g_rx_Standard_200_Rx.ParkingSts` | 1B |
-| 2 | Atom_VCU_HighVoltageBatterySt | 0x0003 | 0x5001 | 0x0001 | Getter | `g_rx_Standard_200_Rx.HighVoltageBatterySts` | 2B |
-| 3 | Atom_VCU_IgnitionSt | 0x0004 | 0x5001 | 0x0001 | Getter | `g_tx_Standard_100_Tx.IgnitionSts` | 1B |
-| 4 | Atom_BCM_VehicleMode | 0x0005 | 0x5001 | 0x0001 | Setter | `g_tx_Standard_100_Tx.VehicleMode` | 1B |
-| 5 | Atom_BCM_VehicleModeSt | 0x0005 | 0x8001 | 0x0001 | Notifier | `g_tx_Standard_100_Tx.VehicleMode` | 1B |
+| 0 | Atom_VCU_DriSpeedSt | 0x0001 | 0x8001 | 0x0001 | Notifier | `Can_Get_Rx_signal_VehicleSpeed()` | 2B |
+| 1 | Atom_VCU_ParkingSt | 0x0002 | 0x5001 | 0x0001 | Getter | `Can_Get_Rx_signal_ParkingSts()` | 1B |
+| 2 | Atom_VCU_HighVoltageBatterySt | 0x0003 | 0x5001 | 0x0001 | Getter | `Can_Get_Rx_signal_HighVoltageBatterySts()` | 2B |
+| 3 | Atom_VCU_IgnitionSt | 0x0004 | 0x5001 | 0x0001 | Getter | `Can_Get_Rx_signal_IgnitionSts()` | 1B |
+| 4 | Atom_BCM_VehicleMode | 0x0005 | 0x5001 | 0x0001 | Setter | `Pwsm_TstVehicleMode(&mode)` | 1B |
+| 5 | Atom_BCM_VehicleModeSt | 0x0005 | 0x8001 | 0x0001 | Notifier | `Pwsm_TstVehicleMode(NULL)` | 1B |
 
 ### 4.2 Setter-Notifier 联动
 
@@ -213,8 +213,7 @@ flowchart TD
     K --> L[CAN RX 处理]
     L --> M[检测 Notifier 变化并发送]
     M --> N[轮询 Method 请求]
-    N --> O[CAN TX 处理]
-    O --> Z
+    N --> Z
 ```
 
 ### 6.3 Notifier 发送流程
@@ -342,17 +341,17 @@ CONNECTED ──(A核发送断开通知/心跳超时)──> DISCONNECTED
 
 | 函数 | 信号源 | 序列化 | 返回长度 |
 |------|--------|--------|---------|
-| `SOA_ReadVehicleSpeed` | `g_rx_Standard_200_Rx.VehicleSpeed` | uint16 大端序 | 2B |
-| `SOA_ReadWorkVehicleMode` | `g_tx_Standard_100_Tx.VehicleMode` | uint8 | 1B |
-| `SOA_ReadParkingSts` | `g_rx_Standard_200_Rx.ParkingSts` | uint8 | 1B |
-| `SOA_ReadHighVoltageBatterySts` | `g_rx_Standard_200_Rx.HighVoltageBatterySts` | uint16 大端序 | 2B |
-| `SOA_ReadIgnitionSts` | `g_tx_Standard_100_Tx.IgnitionSts` | uint8 | 1B |
+| `SOA_ReadVehicleSpeed` | `Can_Get_Rx_signal_VehicleSpeed()` | uint16 大端序 | 2B |
+| `SOA_ReadWorkVehicleMode` | `Pwsm_TstVehicleMode(NULL)` | uint8 | 1B |
+| `SOA_ReadParkingSts` | `Can_Get_Rx_signal_ParkingSts()` | uint8 | 1B |
+| `SOA_ReadHighVoltageBatterySts` | `Can_Get_Rx_signal_HighVoltageBatterySts()` | uint16 大端序 | 2B |
+| `SOA_ReadIgnitionSts` | `Can_Get_Rx_signal_IgnitionSts()` | uint8 | 1B |
 
 ### 8.2 Write 函数（Setter）
 
 | 函数 | 信号目标 | 输入 | 返回 |
 |------|---------|------|------|
-| `SOA_WriteVehicleMode` | `g_tx_Standard_100_Tx.VehicleMode` | 1B uint8 | 0=成功, 1=失败 |
+| `SOA_WriteVehicleMode` | `Pwsm_TstVehicleMode(&mode)` | 1B uint8 | 0=成功, 1=失败 |
 
 ### 8.3 函数签名
 
@@ -383,13 +382,13 @@ typedef uint8  (*SOA_SignalWriteFunc_t)(const uint8 *inBuf, uint16 len);
 
 | CAN ID | DBC 结构体 | SOA 使用的信号 |
 |--------|-----------|---------------|
-| 0x200 | `g_rx_Standard_200_Rx` | VehicleSpeed, ParkingSts, HighVoltageBatterySts |
+| 0x200 | `g_rx_Standard_200_Rx` | VehicleSpeed, ParkingSts, HighVoltageBatterySts, IgnitionSts |
 
 ### 10.2 CAN TX（发送）
 
 | CAN ID | DBC 结构体 | SOA 使用的信号 |
 |--------|-----------|---------------|
-| 0x100 | `g_tx_Standard_100_Tx` | VehicleMode, IgnitionSts |
+| 0x100 | `g_tx_Standard_100_Tx` | 当前 `SoaAdapter_Main()` 未调用 TX 处理；VehicleMode 由 PWSM 状态读写 |
 
 ---
 
@@ -429,7 +428,7 @@ PICC_SendEvent(PICC_APP_SOA, 3, payload, 14, PICC_EVENT_WITHOUT_ACK);
 00 05  50 01  00 01  00 05  00 00  00 01  01
 ```
 
-**M→A 响应（读取链接 Notifier 当前值=1）：**
+**M→A 响应（通过链接 Notifier 读取 PWSM 当前值=1）：**
 ```
 00 05  50 01  00 01  00 05  00 00  00 01  01
 ```
@@ -441,8 +440,8 @@ PICC_SendEvent(PICC_APP_SOA, 3, payload, 14, PICC_EVENT_WITHOUT_ACK);
 ### 12.1 初始化顺序
 
 ```
-1. PICC_PreOS_Init()          // IPCF 驱动 + PICC 基础设施
-2. FlexCAN_Process_Init()     // CAN 驱动初始化
+1. FlexCAN_Process_Init()     // CAN 驱动初始化
+2. PICC_PreOS_Init()          // IPCF 驱动 + PICC 基础设施
 3. SoaAdapter_Init()          // SOA Adapter 注册（在 App_Init_All() 中）
 4. vTaskStartScheduler()      // 启动 RTOS
 ```

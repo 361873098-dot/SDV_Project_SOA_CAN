@@ -329,8 +329,8 @@ unsigned char FlexCAN_Message_Rx_unpack(uint32 MsgId, void *msgRx) {
   }
 
   /* Delegate to auto-generated unified unpack */
-  if (Standard_Rx_unpack((uint32_t)MsgId, msgRx,
-                          (const uint8_t *)msg_frame, (uint8_t)8U) != 0) {
+  if (Standard_Rx_unpack((uint32)MsgId, msgRx,
+                          (const uint8 *)msg_frame, (uint8)8U) != 0) {
     return AINFC_CAN_ERROR;
   }
 
@@ -353,8 +353,8 @@ unsigned char FlexCAN_Message_Tx_pack(uint32 MsgId, const void *TxData) {
   }
 
   /* Delegate to auto-generated unified pack */
-  if (Standard_Tx_pack((uint32_t)MsgId, (uint8_t *)txMsg,
-                        TxData, (uint8_t)8U) != 0) {
+  if (Standard_Tx_pack((uint32)MsgId, (uint8 *)txMsg,
+                        TxData, (uint8)8U) != 0) {
     return AINFC_CAN_ERROR;
   }
 

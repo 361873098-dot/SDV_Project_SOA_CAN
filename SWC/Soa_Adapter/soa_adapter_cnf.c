@@ -136,7 +136,7 @@ uint8 SOA_WriteVehicleMode(const uint8 *inBuf, uint16 len)
     {
         return 1U;  /* Error */
     }
-    uint8_t mode = inBuf[0];
+    uint8 mode = inBuf[0];
     Pwsm_TstVehicleMode(&mode);
 
    
