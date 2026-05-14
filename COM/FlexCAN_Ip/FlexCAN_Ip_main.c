@@ -375,7 +375,7 @@ void AINFC_Can_Cyclic_10ms(void) {
    * RX Processing - poll both RX MBs
    * ==================================================================== */
 
-  //(void)FlexCAN_Message_Rx_unpack(STANDARD_200_RX_ID, &g_rx_Standard_200_Rx);
+   (void)FlexCAN_Message_Rx_unpack(STANDARD_200_RX_ID, &g_rx_Standard_200_Rx);
   
 
   /* RX MB1 (ID=0x201) — no DBC mapping */
@@ -394,7 +394,7 @@ void AINFC_Can_Cyclic_10ms(void) {
   //Standard_100_Tx_pack(g_txData0, &g_tx_Standard_100_Tx, STANDARD_100_TX_DLC);
   //(void)AINFC_Can_TxMsg(0U, AINFC_TX_MB0, g_txData0);
 
- // (void)FlexCAN_Message_Tx_pack(STANDARD_100_TX_ID, &g_tx_Standard_100_Tx);
+  //(void)FlexCAN_Message_Tx_pack(STANDARD_100_TX_ID, &g_tx_Standard_100_Tx);
 
 
 

@@ -498,7 +498,6 @@ void SoaAdapter_Main(void)
         (s_soaState.prevLinkState != PICC_LINK_STATE_CONNECTED))
     {
         /* Link just established — send all Notifier initial values */
-        SoaAdapter_CanRxProcess();  /* Get fresh CAN data first */
         SOA_SendAllNotifierInitValues();
     }
 
@@ -521,8 +520,6 @@ void SoaAdapter_Main(void)
 
     s_soaState.prevLinkState = curLinkState;
 
-    /* 4. Process CAN RX (update DBC structs with latest CAN data) */
-    SoaAdapter_CanRxProcess();
 
     /* 5. Check Notifiers for value changes and send if changed */
     SOA_CheckAndSendNotifiers();
@@ -530,8 +527,7 @@ void SoaAdapter_Main(void)
     /* 6. Poll and handle Getter/Setter requests from A-Core */
     SOA_PollMethodRequests();
 
-    /* 7. Process CAN TX (send updated DBC struct values onto the bus) DBC no can TX message config */
-  //  SoaAdapter_CanTxProcess();
+
 }
 
 /**
