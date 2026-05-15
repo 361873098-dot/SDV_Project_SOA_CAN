@@ -30,8 +30,8 @@ extern "C" {
 /** Maximum supported physical channels */
 #define PICC_MAX_CHANNELS               (2U)
 
-/** Maximum supported link app contexts (per-app, matches PICC_APP_MAX) */
-#define PICC_MAX_LINK_APPS              (10U)
+/** Maximum shared link pool size */
+#define PICC_LINK_SHARED_POOL_SIZE      (10U)
 
 /*==================================================================================================
  *                                         Enum Types
@@ -60,19 +60,23 @@ typedef struct {
     uint8        instanceId;    /**< IPCF instance ID */
     uint8        channelId;     /**< IPCF channel ID */
     uint16       Client_linkReq_PeriodMs; /**< CLIENT connection request period (ms), 0=default 10ms */
-    boolean      isUsed;        /**< Is slot in use */
 } PICC_LinkConfig_t;
 
 /**
- * @brief Link context
+ * @brief Shared link context — deduplicated by (remoteId, channelId)
+ *
+ * Multiple Client apps connecting to the same (remoteId, channelId) share
+ * one link context. refCount tracks how many apps share this link.
+ * Server apps do NOT allocate a link pool entry (linkSharedIdx = 0xFF).
  */
 typedef struct {
-    PICC_LinkConfig_t config;           /**< Link configuration */
-    volatile PICC_LinkState_e state;    /**< Current state (volatile) */
-    boolean           isInitialized;    /**< Whether initialized */
-    uint16            periodCounter;    /**< Per-app period counter for CLIENT request timing */
-    uint8             backoffCounter;   /**< Per-app send backoff counter */
-} PICC_LinkContext_t;
+    PICC_LinkConfig_t      config;           /**< Link configuration */
+    volatile PICC_LinkState_e state;          /**< Current state (volatile) */
+    uint8                  isInitialized;     /**< Whether initialized */
+    uint16                 periodCounter;     /**< Period counter for CLIENT request timing */
+    uint8                  backoffCounter;    /**< Send backoff counter */
+    uint8                  refCount;          /**< Number of apps sharing this link */
+} PICC_LinkShared_t;
 
 /*==================================================================================================
  *                                         Function Declarations
@@ -80,38 +84,39 @@ typedef struct {
 
 /**
  * @brief One-time initialization of the link management layer
- * 
- * Clears all link app contexts. Must be called once during
- * PICC_InfraInit() before any PICC_Init()/PICC_LinkRegisterApp() calls.
+ *
+ * Clears all shared link pool entries. Must be called once during
+ * PICC_InfraInit() before any PICC_Init()/PICC_LinkRegisterShared() calls.
  */
 void PICC_LinkLayerInit(void);
 
 /**
- * @brief Register a single application link context
- * 
- * Finds a free slot and registers the app without affecting other contexts.
- * CLIENT role: auto enters CONNECTING state.
- * SERVER role: stays in DISCONNECTED state.
- * 
- * @param[in] config Link configuration for this app
- * @return 0 on success, -1 on failure (no free slot or bad param)
+ * @brief Register a shared link for an application
+ *
+ * Server role: Sets linkSharedIdx=0xFF in the app registry and returns.
+ * Client role: Finds or creates a shared link by (remoteId, channelId).
+ *   - If a link already exists for this (remoteId, channelId), increments
+ *     refCount and shares it.
+ *   - Otherwise, allocates a new link from the pool.
+ *
+ * @param[in] localId          Application local ID
+ * @param[in] remoteId         Remote peer ID
+ * @param[in] channelId        IPCF channel ID
+ * @param[in] role              Application role
+ * @param[in] linkReqPeriodMs  Link request period (ms)
+ * @return PICC_E_OK on success, negative on failure
  */
-sint8 PICC_LinkRegisterApp(const PICC_LinkConfig_t *config);
+sint8 PICC_LinkRegisterShared(uint8 localId, uint8 remoteId,
+                               uint8 channelId, uint8 role,
+                               uint16 linkReqPeriodMs);
 
 /**
- * @brief Deinitialize link management module
+ * @brief Deinitialize link management layer
  */
 void PICC_LinkDeinit(void);
 
 /**
  * @brief Handle connection response (Client role)
- * 
- * @param[in] header     Message header
- * @param[in] payload    Payload data
- * @param[in] len        Payload length
- * @param[in] instanceId Receive instance ID
- * @param[in] channelId  Receive channel ID
- * @return 0 on success, non-zero on failure
  */
 sint8 PICC_LinkHandleResponse(const PICC_MsgHeader_t *header,
                               const uint8 *payload, uint16 len,
@@ -119,13 +124,6 @@ sint8 PICC_LinkHandleResponse(const PICC_MsgHeader_t *header,
 
 /**
  * @brief Handle connection request (Server role)
- * 
- * @param[in] header     Message header
- * @param[in] payload    Payload data
- * @param[in] len        Payload length
- * @param[in] instanceId Receive instance ID
- * @param[in] channelId  Receive channel ID
- * @return 0 on success, non-zero on failure
  */
 sint8 PICC_LinkHandleRequest(const PICC_MsgHeader_t *header,
                              const uint8 *payload, uint16 len,
@@ -133,22 +131,11 @@ sint8 PICC_LinkHandleRequest(const PICC_MsgHeader_t *header,
 
 /**
  * @brief Get application-level link state by ID pair
- * 
- * @param[in] localId  Local ID
- * @param[in] remoteId Remote ID
- * @return Connection state for the specified app pair
  */
 PICC_LinkState_e PICC_LinkGetStateByIds(uint8 localId, uint8 remoteId);
 
 /**
  * @brief Handle disconnect notification
- * 
- * @param[in] header     Message header
- * @param[in] payload    Payload data
- * @param[in] len        Payload length
- * @param[in] instanceId Receive instance ID
- * @param[in] channelId  Receive channel ID
- * @return 0 on success, non-zero on failure
  */
 sint8 PICC_LinkHandleDisconnect(const PICC_MsgHeader_t *header,
                                 const uint8 *payload, uint16 len,
@@ -156,36 +143,21 @@ sint8 PICC_LinkHandleDisconnect(const PICC_MsgHeader_t *header,
 
 /**
  * @brief Get current connection state for specified channel
- * 
- * @param[in] channelId IPCF channel ID
- * @return Connection state
  */
 PICC_LinkState_e PICC_LinkGetState(uint8 channelId);
 
 /**
  * @brief Set link state to CONNECTING (called by heartbeat on timeout)
- * 
- * @param[in] instanceId Instance ID
- * @param[in] channelId  Channel ID
  */
 void PICC_LinkTriggerReconnect(uint8 instanceId, uint8 channelId);
 
 /**
  * @brief Link process - called from PICC periodic task (10ms)
- * 
- * Handles connection requests (Client role).
  */
 void PICC_LinkProcess(void);
 
 /**
  * @brief Process received link management message (dispatch by subType)
- * 
- * @param[in] header     Protocol header
- * @param[in] payload    Payload
- * @param[in] len        Payload length
- * @param[in] instanceId Instance ID
- * @param[in] channelId  Channel ID
- * @return 0 on success, non-zero on failure
  */
 sint8 PICC_LinkProcessMessage(const PICC_MsgHeader_t *header,
                               const uint8 *payload, uint16 len,

@@ -3,8 +3,10 @@
  * @brief PICC Mailbox Module — Implementation
  *
  * Manages per-application receive mailboxes:
- *   - App context storage (registration, config)
- *   - Incoming message routing and slot storage
+ *   - App registry (g_appRegistry[128], indexed by localId)
+ *   - Global slot pool (g_slotPool[128], allocated on-demand)
+ *   - Remote-to-local ID mapping (g_remoteToLocal[128])
+ *   - Incoming message routing with channelId defense check
  *   - Polling read interface for Method/Response/Event data
  *
  * This is an INTERNAL driver module. Application layers do NOT call these
@@ -19,16 +21,17 @@ extern "C" {
 #endif
 
 #include "picc_mailbox.h"
+#include "Picc_main.h" /* For PICC_HANDLE_ERROR */
 
 /*==================================================================================================
  *                                         Configuration
  *==================================================================================================*/
 
-/** Max number of different msgId slots per app per type */
-#define PICC_RX_MAX_SLOTS       (6U)
-
 /** Max payload bytes stored per slot */
 #define PICC_RX_MAX_DATA_LEN    (32U)
+
+/** Total slot pool size */
+#define PICC_SLOT_POOL_SIZE     (128U)
 
 /*==================================================================================================
  *                                         Internal Types
@@ -46,21 +49,32 @@ typedef struct {
     uint16   cbResultLen;                   /**< Callback result length (0 if no callback) */
 } PICC_RxSlot_t;
 
-/** Per-application mailbox (3 types of incoming messages) */
+/**
+ * @brief Per-application registry entry (20 bytes, aligned)
+ *
+ * Field layout: uint8 fields (offset 0~11), uint16 fields (offset 12~19)
+ * Ensures all uint16 fields are naturally aligned on 2-byte boundary.
+ */
 typedef struct {
-    PICC_RxSlot_t method[PICC_RX_MAX_SLOTS];    /**< Method requests (Server receives) */
-    PICC_RxSlot_t response[PICC_RX_MAX_SLOTS];  /**< Method responses (Client receives) */
-    PICC_RxSlot_t event[PICC_RX_MAX_SLOTS];     /**< Event notifications */
-    uint8 methodVictim;                         /**< Round-robin victim for method slots */
-    uint8 responseVictim;                       /**< Round-robin victim for response slots */
-    uint8 eventVictim;                          /**< Round-robin victim for event slots */
-} PICC_RxMailbox_t;
-
-/** Per-application context */
-typedef struct {
-    boolean          isRegistered;
-    PICC_AppConfig_t config;
-} PICC_AppContext_t;
+    /* ---- uint8 fields (offset 0~11) ---- */
+    uint8    isRegistered;       /**< 1B, offset  0 */
+    uint8    remoteId;           /**< 1B, offset  1 */
+    uint8    role;               /**< 1B, offset  2 */
+    uint8    channelId;          /**< 1B, offset  3 */
+    uint8    methodSlotCount;    /**< 1B, offset  4 */
+    uint8    responseSlotCount;  /**< 1B, offset  5 */
+    uint8    eventSlotCount;     /**< 1B, offset  6 */
+    uint8    methodVictim;       /**< 1B, offset  7 */
+    uint8    responseVictim;     /**< 1B, offset  8 */
+    uint8    eventVictim;        /**< 1B, offset  9 */
+    uint8    linkSharedIdx;      /**< 1B, offset 10 — 0xFF=not allocated (Server) */
+    uint8    _pad;               /**< 1B, offset 11 — alignment padding */
+    /* ---- uint16 fields (offset 12~19) ---- */
+    uint16   linkReqPeriodMs;    /**< 2B, offset 12 */
+    uint16   methodSlotStart;    /**< 2B, offset 14 */
+    uint16   responseSlotStart;  /**< 2B, offset 16 */
+    uint16   eventSlotStart;     /**< 2B, offset 18 */
+} PICC_AppEntry_t;
 
 /*==================================================================================================
  *                                         Private Variables
@@ -69,88 +83,30 @@ typedef struct {
 /** Whether infrastructure is initialized */
 static boolean g_piccInfraInit = FALSE;
 
-/** Per-application context */
-static PICC_AppContext_t g_appContexts[PICC_APP_MAX];
+/** Per-application registry (indexed by localId) */
+static PICC_AppEntry_t g_appRegistry[PICC_REGISTRY_SIZE];
 
-/** Per-application receive mailbox */
-static PICC_RxMailbox_t g_rxMailbox[PICC_APP_MAX];
+/** Global slot pool — allocated on-demand from PICC_Init */
+static PICC_RxSlot_t g_slotPool[PICC_SLOT_POOL_SIZE];
 
-/** Whether g_appContexts/g_rxMailbox have been zeroed */
-static boolean g_contextsInited = FALSE;
+/** Next free index in g_slotPool */
+static uint16 g_slotPoolNextFree;
+
+/** Remote-to-local ID mapping table (0xFF = not mapped) */
+static uint8 g_remoteToLocal[PICC_REGISTRY_SIZE];
+
+/** Stored application configs (indexed by localId) */
+static PICC_AppConfig_t g_appConfigs[PICC_REGISTRY_SIZE];
 
 /*==================================================================================================
  *                                         Static Helper Functions
  *==================================================================================================*/
 
 /**
- * @brief Initialize all app contexts and mailboxes (called once)
- */
-static void PICC_InitContexts(void)
-{
-    uint8 a, s;
-    if (g_contextsInited == FALSE) {
-        for (a = 0U; a < (uint8)PICC_APP_MAX; a++) {
-            g_appContexts[a].isRegistered = FALSE;
-            g_rxMailbox[a].methodVictim = 0U;
-            g_rxMailbox[a].responseVictim = 0U;
-            g_rxMailbox[a].eventVictim = 0U;
-            for (s = 0U; s < PICC_RX_MAX_SLOTS; s++) {
-                g_rxMailbox[a].method[s].ready = FALSE;
-                g_rxMailbox[a].method[s].msgId = 0xFFU;
-                g_rxMailbox[a].method[s].sessionId = 0U;
-                g_rxMailbox[a].method[s].dataLen = 0U;
-                g_rxMailbox[a].method[s].cbResultLen = 0U;
-                g_rxMailbox[a].response[s].ready = FALSE;
-                g_rxMailbox[a].response[s].msgId = 0xFFU;
-                g_rxMailbox[a].response[s].sessionId = 0U;
-                g_rxMailbox[a].response[s].dataLen = 0U;
-                g_rxMailbox[a].response[s].cbResultLen = 0U;
-                g_rxMailbox[a].event[s].ready = FALSE;
-                g_rxMailbox[a].event[s].msgId = 0xFFU;
-                g_rxMailbox[a].event[s].sessionId = 0U;
-                g_rxMailbox[a].event[s].dataLen = 0U;
-                g_rxMailbox[a].event[s].cbResultLen = 0U;
-            }
-        }
-        g_contextsInited = TRUE;
-    }
-}
-
-/**
- * @brief Find appIndex by localId
- * @return appIndex (0..MAX-1) or 0xFF if not found
- */
-static uint8 PICC_FindAppByLocalId(uint8 localId)
-{
-    uint8 i;
-    for (i = 0U; i < (uint8)PICC_APP_MAX; i++) {
-        if (g_appContexts[i].isRegistered &&
-            g_appContexts[i].config.localId == localId) {
-            return i;
-        }
-    }
-    return 0xFFU;
-}
-
-/**
- * @brief Find appIndex by remoteId
- */
-static uint8 PICC_FindAppByRemoteId(uint8 remoteId)
-{
-    uint8 i;
-    for (i = 0U; i < (uint8)PICC_APP_MAX; i++) {
-        if (g_appContexts[i].isRegistered &&
-            g_appContexts[i].config.remoteId == remoteId) {
-            return i;
-        }
-    }
-    return 0xFFU;
-}
-
-/**
  * @brief Store data into a slot array (find by msgId, reuse or allocate)
  */
-static void PICC_StoreToSlot(PICC_RxSlot_t *slots, uint8 msgId, uint8 sessionId,
+static void PICC_StoreToSlot(PICC_RxSlot_t *slots, uint8 slotCount,
+                              uint8 msgId, uint8 sessionId,
                               uint8 returnCode,
                               const uint8 *payload, uint16 payloadLen,
                               uint8 *victimIdx)
@@ -159,73 +115,24 @@ static void PICC_StoreToSlot(PICC_RxSlot_t *slots, uint8 msgId, uint8 sessionId,
     uint8 freeSlot = 0xFFU;
     uint16 copyLen;
 
-    /* Find existing slot with same msgId, or first free slot */
-    for (s = 0U; s < PICC_RX_MAX_SLOTS; s++) {
+    /* Lookup strategy: prefer overwriting an existing slot with the same msgId
+     * (keep only the latest value), otherwise use the first free slot
+     * (msgId == 0xFF indicates free) */
+    for (s = 0U; s < slotCount; s++) {
         if (slots[s].msgId == msgId) {
-            freeSlot = s;
+            freeSlot = s;   /* Found a slot with the same msgId — overwrite old data */
             break;
         }
         if ((freeSlot == 0xFFU) && (slots[s].msgId == 0xFFU)) {
-            freeSlot = s;
+            freeSlot = s;   /* Record the first free slot */
         }
     }
 
     if (freeSlot == 0xFFU) {
-        /* All slots occupied with different msgIds, evict in round-robin order. */
+        /* All slots occupied with different msgIds — use round-robin eviction.
+         * victimIdx cycles through [0, slotCount) to ensure fair eviction. */
         freeSlot = *victimIdx;
-        *victimIdx = (uint8)((*victimIdx + 1U) % PICC_RX_MAX_SLOTS);
-    }
-
-    copyLen = (payloadLen > PICC_RX_MAX_DATA_LEN) ? PICC_RX_MAX_DATA_LEN : payloadLen;
-    slots[freeSlot].msgId = msgId;
-    slots[freeSlot].sessionId = sessionId;
-    slots[freeSlot].returnCode = returnCode;
-    for (s = 0U; s < copyLen; s++) {
-        slots[freeSlot].data[s] = payload[s];
-    }
-    slots[freeSlot].dataLen = payloadLen;
-    slots[freeSlot].cbResultLen = 0U;  /* Clear cbResult, will be filled later if callback exists */
-    slots[freeSlot].ready = TRUE;
-}
-
-/**
- * @brief Store Response data into a slot array using (msgId + sessionId) as composite key.
- *
- * Unlike PICC_StoreToSlot which matches only by msgId (suitable for Method request
- * and Event where only one outstanding message per ID exists), this function uses
- * both msgId AND sessionId to locate an existing slot. This prevents consecutive
- * async Method responses with the same methodId but different sessionIds from
- * silently overwriting each other.
- *
- * Slot search priority:
- *   1. Exact match: same msgId AND same sessionId -> overwrite (duplicate response)
- *   2. First free slot (msgId == 0xFF)
- *   3. Round-robin eviction if all slots are occupied
- */
-static void PICC_StoreResponseToSlot(PICC_RxSlot_t *slots, uint8 msgId,
-                                      uint8 sessionId, uint8 returnCode,
-                                      const uint8 *payload, uint16 payloadLen,
-                                      uint8 *victimIdx)
-{
-    uint8 s;
-    uint8 freeSlot = 0xFFU;
-    uint16 copyLen;
-
-    /* Find existing slot with same (msgId + sessionId), or first free slot */
-    for (s = 0U; s < PICC_RX_MAX_SLOTS; s++) {
-        if ((slots[s].msgId == msgId) && (slots[s].sessionId == sessionId)) {
-            freeSlot = s;
-            break;  /* Exact match: overwrite this slot */
-        }
-        if ((freeSlot == 0xFFU) && (slots[s].msgId == 0xFFU)) {
-            freeSlot = s;
-        }
-    }
-
-    if (freeSlot == 0xFFU) {
-        /* All slots occupied, evict in round-robin order */
-        freeSlot = *victimIdx;
-        *victimIdx = (uint8)((*victimIdx + 1U) % PICC_RX_MAX_SLOTS);
+        *victimIdx = (uint8)((*victimIdx + 1U) % slotCount);
     }
 
     copyLen = (payloadLen > PICC_RX_MAX_DATA_LEN) ? PICC_RX_MAX_DATA_LEN : payloadLen;
@@ -241,14 +148,50 @@ static void PICC_StoreResponseToSlot(PICC_RxSlot_t *slots, uint8 msgId,
 }
 
 /**
- * @brief Read data from a slot (by msgId, optionally by sessionId).
- *        If found and ready, copies data + cbResult and clears flag.
- *
- * @param[in] filterSessionId  Session ID filter. 0x00 = match any session (for Method/Event).
- *                              Non-zero = match exact sessionId (for async Response).
- * @return PICC_E_OK if data available, PICC_E_NO_DATA if not
+ * @brief Store Response data using (msgId + sessionId) as composite key
  */
-static sint8 PICC_ReadFromSlot(PICC_RxSlot_t *slots, uint8 msgId,
+static void PICC_StoreResponseToSlot(PICC_RxSlot_t *slots, uint8 slotCount,
+                                      uint8 msgId, uint8 sessionId, uint8 returnCode,
+                                      const uint8 *payload, uint16 payloadLen,
+                                      uint8 *victimIdx)
+{
+    uint8 s;
+    uint8 freeSlot = 0xFFU;
+    uint16 copyLen;
+
+    /* Find existing slot with same (msgId + sessionId), or first free slot */
+    for (s = 0U; s < slotCount; s++) {
+        if ((slots[s].msgId == msgId) && (slots[s].sessionId == sessionId)) {
+            freeSlot = s;
+            break;
+        }
+        if ((freeSlot == 0xFFU) && (slots[s].msgId == 0xFFU)) {
+            freeSlot = s;
+        }
+    }
+
+    if (freeSlot == 0xFFU) {
+        freeSlot = *victimIdx;
+        *victimIdx = (uint8)((*victimIdx + 1U) % slotCount);
+    }
+
+    copyLen = (payloadLen > PICC_RX_MAX_DATA_LEN) ? PICC_RX_MAX_DATA_LEN : payloadLen;
+    slots[freeSlot].msgId = msgId;
+    slots[freeSlot].sessionId = sessionId;
+    slots[freeSlot].returnCode = returnCode;
+    for (s = 0U; s < copyLen; s++) {
+        slots[freeSlot].data[s] = payload[s];
+    }
+    slots[freeSlot].dataLen = payloadLen;
+    slots[freeSlot].cbResultLen = 0U;
+    slots[freeSlot].ready = TRUE;
+}
+
+/**
+ * @brief Read data from a slot (by msgId, optionally by sessionId)
+ */
+static sint8 PICC_ReadFromSlot(PICC_RxSlot_t *slots, uint8 slotCount,
+                                uint8 msgId,
                                 uint8 filterSessionId, uint8 *returnCode,
                                 uint8 *outSessionId,
                                 uint8 *data, uint16 maxLen, uint16 *actualLen,
@@ -257,17 +200,14 @@ static sint8 PICC_ReadFromSlot(PICC_RxSlot_t *slots, uint8 msgId,
     uint8 s;
     uint16 copyLen;
 
-    for (s = 0U; s < PICC_RX_MAX_SLOTS; s++) {
+    for (s = 0U; s < slotCount; s++) {
         if ((slots[s].msgId == msgId) && (slots[s].ready == TRUE)) {
-            /* If sessionId filter is non-zero, must also match sessionId */
             if ((filterSessionId != 0U) && (slots[s].sessionId != filterSessionId)) {
-                continue;  /* Same methodId but different session, skip */
+                continue;
             }
-            /* Found matching slot with new data */
             if (returnCode != NULL) {
                 *returnCode = slots[s].returnCode;
             }
-            /* Output the stored sessionId (for polling-mode PICC_MethodResponse echo) */
             if (outSessionId != NULL) {
                 *outSessionId = slots[s].sessionId;
             }
@@ -282,7 +222,6 @@ static sint8 PICC_ReadFromSlot(PICC_RxSlot_t *slots, uint8 msgId,
             if (actualLen != NULL) {
                 *actualLen = slots[s].dataLen;
             }
-            /* Output callback result if requested */
             if (cbResult != NULL && cbResultLen != NULL) {
                 uint16 i;
                 uint16 cbCopy = slots[s].cbResultLen;
@@ -312,9 +251,49 @@ static sint8 PICC_ReadFromSlot(PICC_RxSlot_t *slots, uint8 msgId,
  *                                  Public Interface — Initialization
  *==================================================================================================*/
 
-void PICC_MailboxInit(void)
+void PICC_GlobalInit(void)
 {
-    PICC_InitContexts();
+    uint16 i;
+
+    /* Clear app registry */
+    for (i = 0U; i < PICC_REGISTRY_SIZE; i++) {
+        g_appRegistry[i].isRegistered = 0U;
+        g_appRegistry[i].remoteId = 0U;
+        g_appRegistry[i].role = 0U;
+        g_appRegistry[i].channelId = 0U;
+        g_appRegistry[i].methodSlotCount = 0U;
+        g_appRegistry[i].responseSlotCount = 0U;
+        g_appRegistry[i].eventSlotCount = 0U;
+        g_appRegistry[i].methodVictim = 0U;
+        g_appRegistry[i].responseVictim = 0U;
+        g_appRegistry[i].eventVictim = 0U;
+        g_appRegistry[i].linkSharedIdx = 0xFFU;
+        g_appRegistry[i]._pad = 0U;
+        g_appRegistry[i].linkReqPeriodMs = 0U;
+        g_appRegistry[i].methodSlotStart = 0U;
+        g_appRegistry[i].responseSlotStart = 0U;
+        g_appRegistry[i].eventSlotStart = 0U;
+    }
+
+    /* Clear slot pool */
+    for (i = 0U; i < PICC_SLOT_POOL_SIZE; i++) {
+        g_slotPool[i].ready = FALSE;
+        g_slotPool[i].msgId = 0xFFU;
+        g_slotPool[i].sessionId = 0U;
+        g_slotPool[i].returnCode = 0U;
+        g_slotPool[i].dataLen = 0U;
+        g_slotPool[i].cbResultLen = 0U;
+    }
+    g_slotPoolNextFree = 0U;
+
+    /* Clear remote-to-local mapping (0xFF = not mapped) */
+    for (i = 0U; i < PICC_REGISTRY_SIZE; i++) {
+        g_remoteToLocal[i] = 0xFFU;
+    }
+}
+
+void PICC_MailboxReady(void)
+{
     g_piccInfraInit = TRUE;
 }
 
@@ -324,51 +303,147 @@ boolean PICC_MailboxIsReady(void)
 }
 
 /*==================================================================================================
+ *                                  Public Interface — Remote Mapping
+ *==================================================================================================*/
+
+sint8 PICC_RegisterRemoteMapping(uint8 remoteId, uint8 localId)
+{
+    if (remoteId >= PICC_REGISTRY_SIZE) {
+        return PICC_E_PARAM;
+    }
+    if (g_remoteToLocal[remoteId] != 0xFFU &&
+        g_remoteToLocal[remoteId] != localId) {
+        PICC_HANDLE_ERROR(-30);
+        return PICC_E_REMOTE_ID_CONFLICT;
+    }
+    g_remoteToLocal[remoteId] = localId;
+    return PICC_E_OK;
+}
+
+/*==================================================================================================
  *                                  Public Interface — App Registration
  *==================================================================================================*/
 
-sint8 PICC_MailboxRegisterApp(PICC_AppIndex_e appIndex, const PICC_AppConfig_t *config)
+sint8 PICC_MailboxRegisterApp(const PICC_AppConfig_t *config)
 {
-    if ((uint8)appIndex >= (uint8)PICC_APP_MAX) {
-        return PICC_E_PARAM;
-    }
+    uint8 localId;
+    uint8 methodSlots, responseSlots, eventSlots;
+    uint16 totalNeeded;
+    PICC_AppEntry_t *entry;
+
     if (config == NULL) {
         return PICC_E_PARAM;
     }
 
-    g_appContexts[(uint8)appIndex].config = *config;
-    g_appContexts[(uint8)appIndex].isRegistered = TRUE;
+    localId = config->localId;
+
+    /* ID range check */
+    if (localId == 0U || localId >= PICC_REGISTRY_SIZE) {
+        return PICC_E_PARAM;
+    }
+    if (config->remoteId == 0U || config->remoteId >= PICC_REGISTRY_SIZE) {
+        return PICC_E_PARAM;
+    }
+
+    /* Duplicate registration check */
+    if (g_appRegistry[localId].isRegistered != 0U) {
+        PICC_HANDLE_ERROR(-31);
+        return PICC_E_DUPLICATE;
+    }
+
+    /* Determine slot counts based on role (role-based auto allocation)
+     *
+     * SERVER: receives Method requests → needs methodSlots
+     *         never sends Request → responseSlots = 0
+     *         may receive Events → needs eventSlots
+     *
+     * CLIENT: never receives Method Requests → methodSlots = 0
+     *         sends Requests and waits for Responses → needs responseSlots
+     *         receives Events from Server → needs eventSlots
+     */
+    if ((uint8)config->role == (uint8)PICC_ROLE_SERVER) {
+        methodSlots   = PICC_SERVER_DEFAULT_METHOD_SLOTS;   /* 6 */
+        responseSlots = 0U;                                  /* Server never waits for Response */
+        eventSlots    = PICC_SERVER_DEFAULT_EVENT_SLOTS;     /* 6 */
+    } else {
+        methodSlots   = 0U;                                  /* Client never receives Method Requests */
+        responseSlots = PICC_CLIENT_DEFAULT_RESPONSE_SLOTS;  /* 6 */
+        eventSlots    = PICC_CLIENT_DEFAULT_EVENT_SLOTS;      /* 6 */
+    }
+
+    totalNeeded = (uint16)methodSlots + (uint16)responseSlots + (uint16)eventSlots;
+
+    /* Check slot pool capacity */
+    if ((g_slotPoolNextFree + totalNeeded) > PICC_SLOT_POOL_SIZE) {
+        PICC_HANDLE_ERROR(-32);
+        return PICC_E_NOMEM;
+    }
+
+    /* Register remote-to-local mapping */
+    if (PICC_RegisterRemoteMapping(config->remoteId, localId) != PICC_E_OK) {
+        return PICC_E_REMOTE_ID_CONFLICT;
+    }
+
+    /* Store config */
+    g_appConfigs[localId] = *config;
+
+    /* Fill registry entry */
+    entry = &g_appRegistry[localId];
+    entry->isRegistered      = 1U;
+    entry->remoteId          = config->remoteId;
+    entry->role              = (uint8)config->role;
+    entry->channelId         = config->channelId;
+    entry->methodSlotCount   = methodSlots;
+    entry->responseSlotCount = responseSlots;
+    entry->eventSlotCount    = eventSlots;
+    entry->methodVictim      = 0U;
+    entry->responseVictim    = 0U;
+    entry->eventVictim       = 0U;
+    entry->linkSharedIdx     = 0xFFU; /* Will be set by link layer if Client */
+    entry->linkReqPeriodMs   = config->Client_linkReq_PeriodMs;
+
+    /* Allocate slot ranges from pool */
+    entry->methodSlotStart   = g_slotPoolNextFree;
+    g_slotPoolNextFree += methodSlots;
+
+    entry->responseSlotStart = g_slotPoolNextFree;
+    g_slotPoolNextFree += responseSlots;
+
+    entry->eventSlotStart    = g_slotPoolNextFree;
+    g_slotPoolNextFree += eventSlots;
+
     return PICC_E_OK;
 }
 
-boolean PICC_MailboxIsAppRegistered(PICC_AppIndex_e appIndex)
+boolean PICC_MailboxIsAppRegistered(uint8 localId)
 {
-    if ((uint8)appIndex >= (uint8)PICC_APP_MAX) {
+    if (localId == 0U || localId >= PICC_REGISTRY_SIZE) {
         return FALSE;
     }
-    return g_appContexts[(uint8)appIndex].isRegistered;
+    return (g_appRegistry[localId].isRegistered != 0U) ? TRUE : FALSE;
 }
 
-void PICC_MailboxUnregisterApp(PICC_AppIndex_e appIndex)
+sint8 PICC_MailboxGetAppConfig(uint8 localId, const PICC_AppConfig_t **config)
 {
-    if ((uint8)appIndex < (uint8)PICC_APP_MAX) {
-        g_appContexts[(uint8)appIndex].isRegistered = FALSE;
-    }
-}
-
-sint8 PICC_MailboxGetAppConfig(PICC_AppIndex_e appIndex, const PICC_AppConfig_t **config)
-{
-    if ((uint8)appIndex >= (uint8)PICC_APP_MAX) {
+    if (localId == 0U || localId >= PICC_REGISTRY_SIZE) {
         return PICC_E_PARAM;
     }
-    if (g_appContexts[(uint8)appIndex].isRegistered == FALSE) {
+    if (g_appRegistry[localId].isRegistered == 0U) {
         return PICC_E_PARAM;
     }
     if (config == NULL) {
         return PICC_E_PARAM;
     }
-    *config = &g_appContexts[(uint8)appIndex].config;
+    *config = &g_appConfigs[localId];
     return PICC_E_OK;
+}
+
+uint8 PICC_MailboxGetLinkSharedIdx(uint8 localId)
+{
+    if (localId == 0U || localId >= PICC_REGISTRY_SIZE) {
+        return 0xFFU;
+    }
+    return g_appRegistry[localId].linkSharedIdx;
 }
 
 /*==================================================================================================
@@ -376,56 +451,88 @@ sint8 PICC_MailboxGetAppConfig(PICC_AppIndex_e appIndex, const PICC_AppConfig_t 
  *==================================================================================================*/
 
 void PICC_StoreToMailbox(const PICC_MsgHeader_t *header,
-                          const uint8 *payload, uint16 payloadLen)
+                          const uint8 *payload, uint16 payloadLen,
+                          uint8 channelId)
 {
-    uint8 appIdx;
+    uint8 localId = 0xFFU;
+    PICC_AppEntry_t *entry;
 
     switch (header->msgType) {
         /* Method Request (Server receives from A-core) */
         case (uint8)PICC_MSG_REQUEST:
         case (uint8)PICC_MSG_REQUEST_NO_RETURN_WITH_ACK:
         case (uint8)PICC_MSG_REQUEST_NO_RETURN_WITHOUT_ACK:
-            appIdx = PICC_FindAppByLocalId(header->providerId);
-            if (appIdx < (uint8)PICC_APP_MAX) {
-                PICC_StoreToSlot(g_rxMailbox[appIdx].method,
-                                 header->methodId, header->sessionId,
-                                 0U, payload, payloadLen,
-                                 &g_rxMailbox[appIdx].methodVictim);
-            }
+            /* For Method Request: localId = providerId (M-Core is Server) */
+            localId = header->providerId;
             break;
 
         /* Method Response (Client receives reply from A-core) */
         case (uint8)PICC_MSG_RESPONSE:
-            appIdx = PICC_FindAppByLocalId(header->consumerId);
-            if (appIdx == 0xFFU) {
-                appIdx = PICC_FindAppByRemoteId(header->consumerId);
-            }
-            if (appIdx < (uint8)PICC_APP_MAX) {
-                PICC_StoreResponseToSlot(g_rxMailbox[appIdx].response,
-                                 header->methodId, header->sessionId,
-                                 header->returnCode,
-                                 payload, payloadLen,
-                                 &g_rxMailbox[appIdx].responseVictim);
-            }
+            /* For Response: localId = consumerId (M-Core is Client) */
+            localId = header->consumerId;
             break;
 
         /* Event Notification (receiving Event from A-core) */
         case (uint8)PICC_MSG_NOTIFICATION_WITH_ACK:
         case (uint8)PICC_MSG_NOTIFICATION_WITHOUT_ACK:
-            appIdx = PICC_FindAppByRemoteId(header->providerId);
-            if (appIdx == 0xFFU) {
-                appIdx = PICC_FindAppByLocalId(header->providerId);
+            /* For Event: use reverse mapping from providerId to find localId */
+            if (header->providerId < PICC_REGISTRY_SIZE) {
+                localId = g_remoteToLocal[header->providerId];
             }
-            if (appIdx < (uint8)PICC_APP_MAX) {
-                PICC_StoreToSlot(g_rxMailbox[appIdx].event,
-                                 header->methodId, 0U,
-                                 0U, payload, payloadLen,
-                                 &g_rxMailbox[appIdx].eventVictim);
+            if (localId == 0xFFU) {
+                return;  /* No mapping, discard */
             }
             break;
 
         default:
-            /* ACK, EVENT_ACK, ERROR, LINK — not stored in mailbox */
+            return;
+    }
+
+    /* Boundary + registration check */
+    if (localId == 0U || localId >= PICC_REGISTRY_SIZE) {
+        return;
+    }
+    entry = &g_appRegistry[localId];
+    if (entry->isRegistered == 0U) {
+        return;
+    }
+
+    /* ChannelId defense check */
+    if (entry->channelId != channelId) {
+        return;
+    }
+
+    /* Route to corresponding slot segment */
+    switch (header->msgType) {
+        case (uint8)PICC_MSG_REQUEST:
+        case (uint8)PICC_MSG_REQUEST_NO_RETURN_WITH_ACK:
+        case (uint8)PICC_MSG_REQUEST_NO_RETURN_WITHOUT_ACK:
+            PICC_StoreToSlot(&g_slotPool[entry->methodSlotStart],
+                             entry->methodSlotCount,
+                             header->methodId, header->sessionId,
+                             0U, payload, payloadLen,
+                             &entry->methodVictim);
+            break;
+
+        case (uint8)PICC_MSG_RESPONSE:
+            PICC_StoreResponseToSlot(&g_slotPool[entry->responseSlotStart],
+                                      entry->responseSlotCount,
+                                      header->methodId, header->sessionId,
+                                      header->returnCode,
+                                      payload, payloadLen,
+                                      &entry->responseVictim);
+            break;
+
+        case (uint8)PICC_MSG_NOTIFICATION_WITH_ACK:
+        case (uint8)PICC_MSG_NOTIFICATION_WITHOUT_ACK:
+            PICC_StoreToSlot(&g_slotPool[entry->eventSlotStart],
+                             entry->eventSlotCount,
+                             header->methodId, 0U,
+                             0U, payload, payloadLen,
+                             &entry->eventVictim);
+            break;
+
+        default:
             break;
     }
 }
@@ -435,9 +542,11 @@ void PICC_StoreToMailbox(const PICC_MsgHeader_t *header,
  *==================================================================================================*/
 
 void PICC_StoreCallbackResult(const PICC_MsgHeader_t *header,
+                               uint8 channelId,
                                const uint8 *cbResult, uint16 cbResultLen)
 {
-    uint8 appIdx;
+    uint8 localId = 0xFFU;
+    PICC_AppEntry_t *entry;
     PICC_RxSlot_t *slots = NULL;
     uint8 msgId;
     uint8 s;
@@ -451,35 +560,53 @@ void PICC_StoreCallbackResult(const PICC_MsgHeader_t *header,
         case (uint8)PICC_MSG_REQUEST:
         case (uint8)PICC_MSG_REQUEST_NO_RETURN_WITH_ACK:
         case (uint8)PICC_MSG_REQUEST_NO_RETURN_WITHOUT_ACK:
-            appIdx = PICC_FindAppByLocalId(header->providerId);
-            if (appIdx < (uint8)PICC_APP_MAX) {
-                slots = g_rxMailbox[appIdx].method;
-            }
+            localId = header->providerId;
             break;
+
         case (uint8)PICC_MSG_NOTIFICATION_WITH_ACK:
         case (uint8)PICC_MSG_NOTIFICATION_WITHOUT_ACK:
-            appIdx = PICC_FindAppByRemoteId(header->providerId);
-            if (appIdx == 0xFFU) {
-                appIdx = PICC_FindAppByLocalId(header->providerId);
-            }
-            if (appIdx < (uint8)PICC_APP_MAX) {
-                slots = g_rxMailbox[appIdx].event;
+            if (header->providerId < PICC_REGISTRY_SIZE) {
+                localId = g_remoteToLocal[header->providerId];
             }
             break;
+
         default:
             return;
     }
 
-    if (slots == NULL) {
+    if (localId == 0U || localId >= PICC_REGISTRY_SIZE) {
         return;
+    }
+    entry = &g_appRegistry[localId];
+    if (entry->isRegistered == 0U) {
+        return;
+    }
+    if (entry->channelId != channelId) {
+        return;
+    }
+
+    switch (header->msgType) {
+        case (uint8)PICC_MSG_REQUEST:
+        case (uint8)PICC_MSG_REQUEST_NO_RETURN_WITH_ACK:
+        case (uint8)PICC_MSG_REQUEST_NO_RETURN_WITHOUT_ACK:
+            slots = &g_slotPool[entry->methodSlotStart];
+            break;
+
+        case (uint8)PICC_MSG_NOTIFICATION_WITH_ACK:
+        case (uint8)PICC_MSG_NOTIFICATION_WITHOUT_ACK:
+            slots = &g_slotPool[entry->eventSlotStart];
+            break;
+
+        default:
+            return;
     }
 
     msgId = header->methodId;
     copyLen = (cbResultLen > PICC_CB_RESULT_MAX_LEN) ? PICC_CB_RESULT_MAX_LEN : cbResultLen;
 
     /* Find the slot that was just written (same msgId, ready=TRUE) */
-    for (s = 0U; s < PICC_RX_MAX_SLOTS; s++) {
-        if (slots[s].msgId == msgId && slots[s].ready == TRUE) {
+    for (s = 0U; s < entry->methodSlotCount; s++) {
+        if ((slots[s].msgId == msgId) && (slots[s].ready == TRUE)) {
             uint16 i;
             for (i = 0U; i < copyLen; i++) {
                 slots[s].cbResult[i] = cbResult[i];
@@ -494,51 +621,66 @@ void PICC_StoreCallbackResult(const PICC_MsgHeader_t *header,
  *                                  Public Interface — Read (polling)
  *==================================================================================================*/
 
-sint8 PICC_MailboxGetMethodData(PICC_AppIndex_e appIndex, uint8 methodId,
+sint8 PICC_MailboxGetMethodData(uint8 localId, uint8 methodId,
                                 uint8 *data, uint16 maxLen, uint16 *actualLen,
                                 uint8 *outSessionId,
                                 uint8 *cbResult, uint16 *cbResultLen)
 {
-    if ((uint8)appIndex >= (uint8)PICC_APP_MAX) {
+    PICC_AppEntry_t *entry;
+
+    if (localId == 0U || localId >= PICC_REGISTRY_SIZE) {
         return PICC_E_PARAM;
     }
-    if (g_appContexts[(uint8)appIndex].isRegistered == FALSE) {
+    entry = &g_appRegistry[localId];
+    if (entry->isRegistered == 0U) {
         return PICC_E_PARAM;
     }
-    return PICC_ReadFromSlot(g_rxMailbox[(uint8)appIndex].method,
+
+    return PICC_ReadFromSlot(&g_slotPool[entry->methodSlotStart],
+                             entry->methodSlotCount,
                              methodId, 0U, NULL, outSessionId,
                              data, maxLen, actualLen,
                              cbResult, cbResultLen);
 }
 
-sint8 PICC_MailboxGetResponseData(PICC_AppIndex_e appIndex, uint8 methodId,
+sint8 PICC_MailboxGetResponseData(uint8 localId, uint8 methodId,
                                   uint8 sessionId, uint8 *returnCode,
                                   uint8 *data, uint16 maxLen, uint16 *actualLen,
                                   uint8 *cbResult, uint16 *cbResultLen)
 {
-    if ((uint8)appIndex >= (uint8)PICC_APP_MAX) {
+    PICC_AppEntry_t *entry;
+
+    if (localId == 0U || localId >= PICC_REGISTRY_SIZE) {
         return PICC_E_PARAM;
     }
-    if (g_appContexts[(uint8)appIndex].isRegistered == FALSE) {
+    entry = &g_appRegistry[localId];
+    if (entry->isRegistered == 0U) {
         return PICC_E_PARAM;
     }
-    return PICC_ReadFromSlot(g_rxMailbox[(uint8)appIndex].response,
+
+    return PICC_ReadFromSlot(&g_slotPool[entry->responseSlotStart],
+                             entry->responseSlotCount,
                              methodId, sessionId, returnCode, NULL,
                              data, maxLen, actualLen,
                              cbResult, cbResultLen);
 }
 
-sint8 PICC_MailboxGetEventData(PICC_AppIndex_e appIndex, uint8 eventId,
+sint8 PICC_MailboxGetEventData(uint8 localId, uint8 eventId,
                                uint8 *data, uint16 maxLen, uint16 *actualLen,
                                uint8 *cbResult, uint16 *cbResultLen)
 {
-    if ((uint8)appIndex >= (uint8)PICC_APP_MAX) {
+    PICC_AppEntry_t *entry;
+
+    if (localId == 0U || localId >= PICC_REGISTRY_SIZE) {
         return PICC_E_PARAM;
     }
-    if (g_appContexts[(uint8)appIndex].isRegistered == FALSE) {
+    entry = &g_appRegistry[localId];
+    if (entry->isRegistered == 0U) {
         return PICC_E_PARAM;
     }
-    return PICC_ReadFromSlot(g_rxMailbox[(uint8)appIndex].event,
+
+    return PICC_ReadFromSlot(&g_slotPool[entry->eventSlotStart],
+                             entry->eventSlotCount,
                              eventId, 0U, NULL, NULL,
                              data, maxLen, actualLen,
                              cbResult, cbResultLen);

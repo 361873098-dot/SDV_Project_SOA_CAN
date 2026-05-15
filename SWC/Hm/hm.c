@@ -107,6 +107,16 @@ static boolean Hm_IsCan0BusOff(void)
  *  Return value     : noe
  *
  ***********************************************************************************************************************/
+/**
+ * @brief Build fault event data structure from current fault bitmap
+ *
+ * Iterates through Hm_FaultEventMaskIndex[] to check which faults are active,
+ * then populates the healthInfo structure with matching fault details from
+ * Hm_FaultEventIndex[]. Only active faults are included in the Hazards array.
+ *
+ * @param[out] healthInfo    Pointer to the health info structure to populate
+ * @param[in]  faultBitmap   Bitmap representing currently active faults
+ */
 static void Hm_BuildFaultEvent(PICCHealthInfo_st *healthInfo, uint32 faultBitmap)
 {
 	uint8 hazardIndex = 0U;
@@ -163,9 +173,12 @@ static void Hm_BuildFaultEvent(PICCHealthInfo_st *healthInfo, uint32 faultBitmap
  ***********************************************************************************************************************/
 void Hm_Init(void)
 {
+    /* Register Health Management Heartbeat application (M-Core=Server, ProviderID=0x15)
+     * A-Core Client (ConsumerID=0x1A) sends heartbeat method requests.
+     * M-Core Server passively waits for connection on channel 1 (HP). */
     static const PICC_AppConfig_t heal_man_hb_cfg = {
-        .localId                = HEAL_MAN_HB_PROVIDER_ID,   /* M-Core Server */
-        .remoteId               = HEAL_MAN_HB_CONSUMER_ID,   /* A-Core Client */
+        .localId                = HEAL_MAN_HB_PROVIDER_ID,   /* 0x15 — M-Core Server */
+        .remoteId               = HEAL_MAN_HB_CONSUMER_ID,   /* 0x1A — A-Core Client */
         .role                   = PICC_ROLE_SERVER,
         .channelId              = HM_CHANNEL_ID,    /* 1 (HP) */
         .Client_linkReq_PeriodMs = 0U, /* Ignored for SERVER role */
@@ -173,9 +186,12 @@ void Hm_Init(void)
         .eventHandler           = NULL   /* No Event handler needed */
     };
 
+    /* Register Health Management Reporter application (M-Core=Server, ProviderID=0x51)
+     * A-Core Client (ConsumerID=0x5B) requests real-time data and receives fault events.
+     * M-Core Server sends fault Event notifications and responds to real-time queries. */
     static const PICC_AppConfig_t heal_man_reporter_cfg = {
-        .localId                = HEAL_MAN_REPORTER_PROVIDER_ID,   /* M-Core Server */
-        .remoteId               = HEAL_MAN_REPORTER_CONSUMER_ID,   /* A-Core Client */
+        .localId                = HEAL_MAN_REPORTER_PROVIDER_ID,   /* 0x51 — M-Core Server */
+        .remoteId               = HEAL_MAN_REPORTER_CONSUMER_ID,   /* 0x5B — A-Core Client */
         .role                   = PICC_ROLE_SERVER,
         .channelId              = HM_CHANNEL_ID,    /* 1 (HP) */
         .Client_linkReq_PeriodMs = 0U, /* Ignored for SERVER role */
@@ -183,9 +199,8 @@ void Hm_Init(void)
         .eventHandler           = NULL   /* No Event handler needed */
     };
 
-    (void)PICC_Init(PICC_APP_HEALTH, &heal_man_hb_cfg);
-    (void)PICC_Init(PICC_APP_RSV1, &heal_man_reporter_cfg);
-
+    (void)PICC_Init(&heal_man_hb_cfg);
+    (void)PICC_Init(&heal_man_reporter_cfg);
 }
 
 
@@ -200,13 +215,26 @@ void Hm_Init(void)
  *  Return value     : noe
  *
  ***********************************************************************************************************************/
+/**
+ * @brief Heartbeat task — monitors A-Core heartbeat method requests
+ *
+ * State machine:
+ *   STARUP -> RX_POOLING -> TIMEOUT
+ *
+ * STARUP:       Wait for first heartbeat method from A-Core (with timeout)
+ * RX_POOLING:   Continuously poll for heartbeat methods from A-Core
+ * TIMEOUT:      A-Core heartbeat lost — no recovery action currently
+ */
 void Hm_HeartBeat_Task(void)
 {
 
     switch (Hm_HeartBeat_MsgState)
     {
     case HM_HEARTBEAT_STATE_STARUP:
-    	if (PICC_GetMethodData(PICC_APP_HEALTH, HM_HB_METHOD_ID, hm_heartbeat_rx_buf, sizeof(hm_heartbeat_rx_buf), &hm_heartbeat_rx_len, NULL, NULL, NULL) == PICC_E_OK)
+        /* Startup phase: wait for first heartbeat method from A-Core
+         * A-Core sends Method (ID=HM_HB_METHOD_ID) with 4-byte payload:
+         *   [0]=A_CORE_PARTITION_ID, [1-3]=additional data */
+    	if (PICC_GetMethodData(PICC_ID_HEALTH_HB_LOCAL, HM_HB_METHOD_ID, hm_heartbeat_rx_buf, sizeof(hm_heartbeat_rx_buf), &hm_heartbeat_rx_len, NULL, NULL, NULL) == PICC_E_OK)
     	{
     		if (hm_heartbeat_rx_len == 4U && hm_heartbeat_rx_buf[0] == A_CORE_PARTITION_ID)
     		{
@@ -230,7 +258,8 @@ void Hm_HeartBeat_Task(void)
     	break;
 
     case HM_HEARTBEAT_STATE_RX_POOLING:
-    	if (PICC_GetMethodData(PICC_APP_HEALTH, HM_HB_METHOD_ID, hm_heartbeat_rx_buf, sizeof(hm_heartbeat_rx_buf), &hm_heartbeat_rx_len, NULL, NULL, NULL) == PICC_E_OK)
+        /* Steady-state: continuously poll for heartbeat methods from A-Core */
+    	if (PICC_GetMethodData(PICC_ID_HEALTH_HB_LOCAL, HM_HB_METHOD_ID, hm_heartbeat_rx_buf, sizeof(hm_heartbeat_rx_buf), &hm_heartbeat_rx_len, NULL, NULL, NULL) == PICC_E_OK)
     	{
     		if (hm_heartbeat_rx_len == 4U && hm_heartbeat_rx_buf[0] == A_CORE_PARTITION_ID)
     		{
@@ -254,7 +283,7 @@ void Hm_HeartBeat_Task(void)
     	break;
 
     case HM_HEARTBEAT_STATE_TIMEOUT:
-
+        /* A-Core heartbeat lost — application layer should handle this */
     	break;
 
     default:
@@ -278,10 +307,13 @@ void Hm_ReportRealTimeInfo_Task(void)
 {
 	uint8 sessionId = 0U;
 
-	if (PICC_GetMethodData(PICC_APP_RSV1, HM_REPORTER_METHOD_ID, hm_reporter_rx_buf, sizeof(hm_reporter_rx_buf), &hm_reporter_rx_len, &sessionId, NULL, NULL) == PICC_E_OK)
+	/* Poll for real-time data request from A-Core (MethodID=HM_REPORTER_METHOD_ID)
+	 * A-Core sends REQUEST, M-Core replies with RESPONSE containing RealTimeInfo_st */
+	if (PICC_GetMethodData(PICC_ID_HEALTH_RPT_LOCAL, HM_REPORTER_METHOD_ID, hm_reporter_rx_buf, sizeof(hm_reporter_rx_buf), &hm_reporter_rx_len, &sessionId, NULL, NULL) == PICC_E_OK)
 	{
 		if (hm_reporter_rx_len == 4U && hm_reporter_rx_buf[0] == M_CORE_PARTITION_ID)
 		{
+			/* Valid request from A-Core — build M-Core real-time data response */
 			Mcore_RealTimeInfo_Data.PartitionId = M_CORE_PARTITION_ID;
 			Mcore_RealTimeInfo_Data.Reserved[0] = 0U;
 			Mcore_RealTimeInfo_Data.Reserved[1] = 0U;
@@ -294,7 +326,9 @@ void Hm_ReportRealTimeInfo_Task(void)
 			Mcore_RealTimeInfo_Data.RealTimeData.Reserved[2] = 0;
 			Mcore_RealTimeInfo_Data.RealTimeData.Reserved[3] = 0;
 			Mcore_RealTimeInfo_Data.RealTimeData.NrOfRealTimeData = 0;
-			(void)PICC_MethodResponse(PICC_APP_RSV1, HM_REPORTER_METHOD_ID, sessionId, 0x00, &Mcore_RealTimeInfo_Data, sizeof(Mcore_RealTimeInfo_Data));
+
+			/* Send RESPONSE with sessionId matching the original REQUEST */
+			(void)PICC_MethodResponse(PICC_ID_HEALTH_RPT_LOCAL, HM_REPORTER_METHOD_ID, sessionId, 0x00, &Mcore_RealTimeInfo_Data, sizeof(Mcore_RealTimeInfo_Data));
 		}
 		else
 		{
@@ -322,17 +356,23 @@ void Hm_ReportFault_Task(void)
 	uint32 currentFaultBitmap = 0U;
 	PICCHealthInfo_st healthInfo;
 
+	/* Build fault bitmap from hardware status checks:
+	 *   - KL30 under-voltage (PMIC M_FLAG2 VSUPUV7 bit)
+	 *   - CAN0 bus-off (FlexCAN ESR1 fault conf) */
 	currentFaultBitmap |= (Hm_IsKl30UnderVoltage() != FALSE) ? HM_FAULT_MASK_KL30_UV : 0U;
 	currentFaultBitmap |= (Hm_IsCan0BusOff() != FALSE) ? HM_FAULT_MASK_CAN_BUS_OFF : 0U;
 
+	/* Send fault event only when the fault state changes (edge-triggered) */
 	if (currentFaultBitmap != Hm_LastFaultBitmap)
 	{
+		/* Build PICCHealthInfo_st from current bitmap and send via IPCF Event
+		 * Uses PICC_EVENT_WITHOUT_ACK (fire-and-forget) per M-Core constraint */
 		Hm_BuildFaultEvent(&healthInfo, currentFaultBitmap);
-		(void)PICC_SendEvent(PICC_APP_RSV1, HM_FAULT_EVENT_ID, (const uint8 *)&healthInfo, (uint16)sizeof(healthInfo), PICC_EVENT_WITHOUT_ACK);
+		(void)PICC_SendEvent(PICC_ID_HEALTH_RPT_LOCAL, HM_FAULT_EVENT_ID, (const uint8 *)&healthInfo, (uint16)sizeof(healthInfo), PICC_EVENT_WITHOUT_ACK);
 	
 	}
 	else{
-		/* Nothing to do */
+		/* No fault state change — skip sending */
 	}
 	Hm_LastFaultBitmap = currentFaultBitmap;
 
@@ -350,23 +390,30 @@ void Hm_ReportFault_Task(void)
  ***********************************************************************************************************************/
 void Hm_Main(void)
 {
+	/* Run heartbeat monitoring task (polls for A-Core heartbeat method) */
 	Hm_HeartBeat_Task();
+
+	/* Run real-time info reporting task (responds to A-Core queries) */
 	Hm_ReportRealTimeInfo_Task();
 
+	/* Run fault reporting task at 1-second period (100 x 10ms) */
 	if (Hm_ReportFault_CycleCnt++ >= HM_REPORT_FAULT_CYCLE_TICKS)
 	{
+		/* Read PMIC fault flag registers before checking fault status */
 		Pmic_ReadRegister(PmicConf_PmicDevice_PmicDevice_0, PMIC_MAIN_UNIT, PMIC_VR55XX_M_FLAG1_ADDR8, &M_Flag1RegData);
 		Pmic_ReadRegister(PmicConf_PmicDevice_PmicDevice_0, PMIC_MAIN_UNIT, PMIC_VR55XX_M_FLAG2_ADDR8, &M_Flag2RegData);
 		Pmic_ReadRegister(PmicConf_PmicDevice_PmicDevice_0, PMIC_MAIN_UNIT, PMIC_VR55XX_M_FLAG3_ADDR8, &M_Flag3RegData);
 		
+		/* Check faults and send Event if state changed */
 		Hm_ReportFault_Task();
 
+		/* Clear PMIC fault flags (write-1-to-clear) */
 		Pmic_WriteRegister(PmicConf_PmicDevice_PmicDevice_0, PMIC_MAIN_UNIT, PMIC_VR55XX_M_FLAG1_ADDR8, 0xFFFFU);
 		Pmic_WriteRegister(PmicConf_PmicDevice_PmicDevice_0, PMIC_MAIN_UNIT, PMIC_VR55XX_M_FLAG2_ADDR8, 0xFFFFU);
 		Hm_ReportFault_CycleCnt = 0U;
 	}
 	else
 	{
-		/* Nothing to do */
+		/* Not yet at 1-second boundary — skip fault reporting */
 	}
 }

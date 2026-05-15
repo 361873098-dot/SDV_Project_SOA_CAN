@@ -35,7 +35,7 @@ extern "C"{
 
 /* PICC module */
 #include "picc_api.h"
-#include "picc_mailbox.h"   /* For PICC_StoreToMailbox, PICC_MailboxInit */
+#include "picc_mailbox.h"   /* For PICC_StoreToMailbox, PICC_GlobalInit */
 #include "picc_stack.h"     /* For PICC_STACK_MAX_SIZE, PICC_StackProcessRx, PICC_StackRegisterMsgCallback */
 #include "picc_protocol.h"  /* For PICC_MsgHeader_t, PICC_MSG_LINK_AVAILABLE */
 #include "picc_heartbeat.h" /* For PICC_HeartbeatInit, PICC_HeartbeatProcess */
@@ -131,7 +131,7 @@ typedef struct {
 typedef struct {
     PICC_DiagRecord_t tx;  /**< TX diagnostic buffer */
     PICC_DiagRecord_t rx;  /**< RX diagnostic buffer */
-    PICC_LinkState_e appLinkState[PICC_APP_MAX];       /**< Per-app link state (index=PICC_AppIndex_e, value=PICC_LinkState_e) */
+    uint8 appLinkState[PICC_REGISTRY_SIZE];            /**< Per-app link state (index=localId, value=PICC_LinkState_e) */
     PICC_LinkState_e  channelLinkState[PICC_MAX_CHANNELS]; /**< Per-channel link state (index=0..1 => channelId 1..2) */
 } PICC_ChannelDiag_t;
 
@@ -162,20 +162,6 @@ static void PICC_DiagRecordInit(PICC_DiagRecord_t *record)
 
 /**
  * @brief Add data to diagnostic record buffer (parse stacked packet, one message per row)
- *
- * Parses stacked packet format:
- *   [CRC_Enable(1B)] [N × Protocol_Message] [Counter(2B)] [CRC(2B)]
- * Each Protocol_Message: [Header(8B)] [Payload(variable)]
- * Header: [ProviderID][MethodID][ConsumerID][SessionID][MsgType][RetCode][Len_Hi][Len_Lo]
- *
- * Each protocol message is stored in its own row:
- *   buffer[row][0..N] = one complete protocol message bytes
- *
- * Heartbeat messages (ProviderID=0xFF or MethodID=0xFF) are filtered out.
- *
- * @param[in] record  Diagnostic record structure
- * @param[in] data    Raw stacked packet data buffer
- * @param[in] len     Data length
  */
 static void PICC_DiagRecordAdd(PICC_DiagRecord_t *record, const uint8 *data, uint32 len)
 {
@@ -191,44 +177,34 @@ static void PICC_DiagRecordAdd(PICC_DiagRecord_t *record, const uint8 *data, uin
         return;
     }
 
-    /* Minimum stacked packet: [CRC_Enable 1B][Header 8B][Counter 2B][CRC 2B] = 13 bytes */
     if (len < 13U) {
         return;
     }
 
-    /* Parse stacked packet: skip CRC_Enable byte, parse until Counter/CRC area */
-    /* Data area ends at len - 4 (2B Counter + 2B CRC) */
-    offset = 1U;  /* Skip CRC_Enable byte */
+    offset = 1U;
 
     while (offset + PICC_HEADER_SIZE <= (len - 4U)) {
         msgPtr = &data[offset];
 
-        /* Get payload length from header bytes 6-7 (big-endian) */
         payloadLen = ((uint16)msgPtr[6] << 8U) | (uint16)msgPtr[7];
         msgLen = PICC_HEADER_SIZE + payloadLen;
 
-        /* Sanity check: message should not exceed remaining data area */
         if (offset + msgLen > (len - 4U)) {
             break;
         }
 
-        /* Filter heartbeat messages (ProviderID=0xFF or MethodID=0xFF) */
         if ((msgPtr[0] == 0xFFU) || (msgPtr[1] == 0xFFU)) {
             offset += msgLen;
             continue;
         }
 
-        /* Filter: only record DiagMgmt (activation line) messages
-         * ProviderID (byte[0]) == 0x34 (52) AND ConsumerID (byte[2]) == 0x3C (60) */
         if ((msgPtr[0] != 81U) || (msgPtr[2] != 91U)) {
             offset += msgLen;
             continue;
         }
 
-        /* Store this protocol message in a new row */
         row = record->currentRow;
 
-        /* Copy message bytes (limited by column width) */
         copyLen = msgLen;
         if (copyLen > PICC_DIAG_RECORD_COLS) {
             copyLen = PICC_DIAG_RECORD_COLS;
@@ -238,12 +214,10 @@ static void PICC_DiagRecordAdd(PICC_DiagRecord_t *record, const uint8 *data, uin
             record->buffer[row][col] = msgPtr[col];
         }
 
-        /* Clear remaining columns in this row */
         for (col = copyLen; col < PICC_DIAG_RECORD_COLS; col++) {
             record->buffer[row][col] = 0U;
         }
 
-        /* Advance to next row (circular) */
         record->currentRow++;
         if (record->currentRow >= PICC_DIAG_RECORD_ROWS) {
             record->currentRow = 0U;
@@ -251,7 +225,6 @@ static void PICC_DiagRecordAdd(PICC_DiagRecord_t *record, const uint8 *data, uin
 
         record->totalRecords++;
 
-        /* Move to next message in stacked packet */
         offset += msgLen;
     }
 }
@@ -259,12 +232,6 @@ static void PICC_DiagRecordAdd(PICC_DiagRecord_t *record, const uint8 *data, uin
 #endif /* PICC_DIAG_RECORD_ENABLE */
 
 #if (PICC_DIAG_RECORD_ENABLE == 1U)
-/**
- * @brief Add TX data to diagnostic record buffer (called from picc_stack.c)
- *
- * @param[in] data    Data buffer to record
- * @param[in] len     Data length
- */
 void PICC_DiagRecordAddTx(const uint8 *data, uint32 len)
 {
     PICC_DiagRecordAdd(&g_diagRecord_Debug.tx, data, len);
@@ -273,23 +240,20 @@ void PICC_DiagRecordAddTx(const uint8 *data, uint32 len)
 /**
  * @brief Update link state diagnostic fields in g_diagRecord_Debug
  *
- * Reads current app-level link state (per PICC_AppIndex_e) and
- * channel-level link state (channelId 1 and 2) into the diagnostic
- * structure, so TRACE32 can inspect them via:
- *   Var.View g_diagRecord_Debug.appLinkState
- *   Var.View g_diagRecord_Debug.channelLinkState
- *
- * Values: 0=DISCONNECTED, 1=CONNECTING, 2=CONNECTED
- *
- * Called from TASK_M0_10MS() periodic task.
+ * Iterates over all 128 registry entries to find registered apps,
+ * then queries their link state. Only registered apps have valid states.
  */
 void PICC_DiagUpdateLinkState(void)
 {
-    uint8 i;
+    uint16 i;
 
-    /* Update per-app link states */
-    for (i = 0U; i < (uint8)PICC_APP_MAX; i++) {
-        g_diagRecord_Debug.appLinkState[i] = PICC_GetAppLinkState((PICC_AppIndex_e)i);
+    /* Update per-app link states — iterate full registry */
+    for (i = 0U; i < PICC_REGISTRY_SIZE; i++) {
+        if (PICC_MailboxIsAppRegistered((uint8)i)) {
+            g_diagRecord_Debug.appLinkState[i] = (uint8)PICC_GetAppLinkState((uint8)i);
+        } else {
+            g_diagRecord_Debug.appLinkState[i] = (uint8)PICC_LINK_STATE_DISCONNECTED;
+        }
     }
 
     /* Update per-channel link states (channelId 1 and 2 mapped to index 0 and 1) */
@@ -320,11 +284,11 @@ static StaticTask_t xTimerTaskTCB;
 static StackType_t uxTimerTaskStack[configTIMER_TASK_STACK_DEPTH];
 
 void vApplicationGetTimerTaskMemory(StaticTask_t **ppxTimerTaskTCBBuffer,
-        StackType_t **ppxTimerTaskStackBuffer, uint32_t *pulTimerTaskStackSize)
+        StackType_t **ppxIdleTaskStackBuffer, uint32_t *pulIdleTaskStackSize)
 {
     *ppxTimerTaskTCBBuffer = &xTimerTaskTCB;
-    *ppxTimerTaskStackBuffer = uxTimerTaskStack;
-    *pulTimerTaskStackSize = configTIMER_TASK_STACK_DEPTH;
+    *ppxIdleTaskStackBuffer = uxTimerTaskStack;
+    *pulIdleTaskStackSize = configTIMER_TASK_STACK_DEPTH;
 }
 #endif
 
@@ -335,9 +299,18 @@ void vApplicationGetTimerTaskMemory(StaticTask_t **ppxTimerTaskTCBBuffer,
  *==================================================================================================*/
 
 /**
- * @brief Data channel receive callback - ISR context
+ * @brief IPCF managed channel RX callback (ISR context)
  *
- * @note Only pushes message to queue, no complex processing
+ * Called by IPCF driver when a new message arrives on a managed channel.
+ * Copies message metadata into App_RxMsg_t and enqueues to g_rxQueue.
+ * The actual processing happens in PICC_Rx_Msg_10ms_Task() which dequeues
+ * and processes messages in task context (not ISR).
+ *
+ * @param[in] arg      Callback argument (pointer to g_appData)
+ * @param[in] instance IPCF instance ID
+ * @param[in] chan_id  Channel ID the message was received on
+ * @param[in] buf      Pointer to the received data buffer (managed by IPCF)
+ * @param[in] size     Size of the received data
  */
 void PICC_data_mng_rx_cb(void *arg, const uint8 instance, uint8 chan_id, void *buf,
         uint32 size)
@@ -356,18 +329,15 @@ void PICC_data_mng_rx_cb(void *arg, const uint8 instance, uint8 chan_id, void *b
     appPtr->last_rx_ch = chan_id;
 
 #if (PICC_DIAG_RECORD_ENABLE == 1U)
-    /* Record received data to diagnostic buffer (excludes heartbeat) */
     PICC_DiagRecordAdd(&g_diagRecord_Debug.rx, (const uint8 *)buf, size);
 #endif
 
-    /* Construct message */
     msg.instance  = instance;
     msg.chanId    = chan_id;
     msg.buf       = buf;
     msg.size      = size;
     msg.isManaged = TRUE;
 
-    /* Push to queue (non-blocking) */
     if (g_rxQueue != NULL) {
         if (xQueueSendFromISR(g_rxQueue, &msg, &xHigherPriorityTaskWoken) != pdPASS) {
             (void)ipc_shm_release_buf(instance, chan_id, buf);
@@ -381,9 +351,6 @@ void PICC_data_mng_rx_cb(void *arg, const uint8 instance, uint8 chan_id, void *b
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
-/**
- * @brief Control channel receive callback - ISR context
- */
 void PICC_data_unmng_rx_cb(void *arg, const uint8 instance, uint8 chan_id, void *mem)
 {
     App_Data_t *appPtr = (App_Data_t *)(*((uintptr *)arg));
@@ -402,16 +369,13 @@ void PICC_data_unmng_rx_cb(void *arg, const uint8 instance, uint8 chan_id, void 
  *                                   Infrastructure Initialization
  *==================================================================================================*/
 
-/**
- * @brief Heartbeat timeout handler — triggers link reconnect
- */
 static void PICC_HeartbeatTimeoutHandler(uint8 instanceId, uint8 channelId)
 {
     PICC_LinkTriggerReconnect(instanceId, channelId);
 }
 
 /**
- * @brief Initialize PICC infrastructure (trace, service layer, mailbox)
+ * @brief Initialize PICC infrastructure (trace, service layer, mailbox, global init)
  *
  * Called by PICC_PreOS_Init() before channel initialization.
  */
@@ -425,17 +389,18 @@ void PICC_InfraInit(void)
 
     /* 3. Stack message callback is registered separately in PICC_PreOS_Init */
 
-    /* 4. Initialize app contexts and mailboxes */
-    PICC_MailboxInit();
+    /* 4. Global init — clear all registry/slot pool/mapping tables */
+    PICC_GlobalInit();
 
-    /* 5. One-time initialization of link management layer (per-app contexts) */
+    /* 5. Mark mailbox ready for registration */
+    PICC_MailboxReady();
+
+    /* 6. One-time initialization of link management layer (shared pool) */
     PICC_LinkLayerInit();
 }
 
 /**
  * @brief Initialize specified IPCF channel (Stack + Heartbeat)
- *
- * Called by PICC_PreOS_Init() for each channel.
  */
 sint8 PICC_InitChannel(uint8 instanceId, uint8 channelId)
 {
@@ -443,7 +408,6 @@ sint8 PICC_InitChannel(uint8 instanceId, uint8 channelId)
     sint8 ret;
     static boolean heartbeatInitialized = FALSE;
 
-    /* 1. Initialize heartbeat module on first channel init */
     if (heartbeatInitialized == FALSE) {
         ret = PICC_HeartbeatInit();
         if (ret != 0) {
@@ -453,7 +417,6 @@ sint8 PICC_InitChannel(uint8 instanceId, uint8 channelId)
         heartbeatInitialized = TRUE;
     }
 
-    /* 2. Initialize Stack layer for this channel */
     stackCfg.channelId  = channelId;
     stackCfg.maxSize    = PICC_STACK_MAX_SIZE;
     stackCfg.periodMs   = PICC_STACK_SEND_PERIOD_MS;
@@ -463,7 +426,6 @@ sint8 PICC_InitChannel(uint8 instanceId, uint8 channelId)
         return ret;
     }
 
-    /* 3. Add channel to heartbeat monitoring */
     ret = PICC_HeartbeatAddChannel(instanceId, channelId);
     if (ret != 0) {
         return ret;
@@ -476,32 +438,17 @@ sint8 PICC_InitChannel(uint8 instanceId, uint8 channelId)
  *                                         PreOS Initialization
  *==================================================================================================*/
 
-/**
- * @brief PICC Pre-OS Initialization (called from main() before vTaskStartScheduler)
- * 
- * Performs all one-time initialization:
- * - IPCF driver init (internally creates softirq task)
- * - PICC channel/service/link init
- * 
- * @note This function does NOT depend on the RTOS scheduler being active.
- *       All FreeRTOS API calls used here (xQueueCreate, xTaskCreate inside
- *       ipc_shm_init) are valid before vTaskStartScheduler().
- */
 void PICC_PreOS_Init(void)
 {
     sint8 err = -IPC_SHM_E_INVAL;
 
-    /* ========================================================================
-     * 1. Initialize receive queue
-     * ======================================================================== */
+    /* 1. Initialize receive queue */
     g_rxQueue = xQueueCreate(10, sizeof(App_RxMsg_t));
     if (g_rxQueue == NULL) {
         PICC_HANDLE_ERROR(-1);
     }
 
-    /* ========================================================================
-     * 2. Initialize application data
-     * ======================================================================== */
+    /* 2. Initialize application data */
     g_appData.rx_count    = 0U;
     g_appData.tx_count    = 0U;
     g_appData.error_count = 0U;
@@ -511,21 +458,17 @@ void PICC_PreOS_Init(void)
     g_appData.link_state  = (uint8)PICC_LINK_STATE_DISCONNECTED;
 
 #if (PICC_DIAG_RECORD_ENABLE == 1U)
-    /* Initialize diagnostic record buffers */
     PICC_DiagRecordInit(&g_diagRecord_Debug.rx);
     PICC_DiagRecordInit(&g_diagRecord_Debug.tx);
 
-    /* Initialize link state diagnostic fields */
-    for (uint8 k = 0U; k < (uint8)PICC_APP_MAX; k++) {
+    for (uint16 k = 0U; k < PICC_REGISTRY_SIZE; k++) {
         g_diagRecord_Debug.appLinkState[k] = (uint8)PICC_LINK_STATE_DISCONNECTED;
     }
     g_diagRecord_Debug.channelLinkState[0] = (uint8)PICC_LINK_STATE_DISCONNECTED;
     g_diagRecord_Debug.channelLinkState[1] = (uint8)PICC_LINK_STATE_DISCONNECTED;
 #endif
 
-    /* ========================================================================
-     * 3. Initialize IPCF driver
-     * ======================================================================== */
+    /* 3. Initialize IPCF driver */
     do {
         err = ipc_shm_init(&ipcf_shm_instances_cfg);
     } while (err == -IPC_SHM_E_REMOTE_INIT_IN_PROGRESS);
@@ -538,26 +481,18 @@ void PICC_PreOS_Init(void)
         /* Remote not ready, but don't block */
     }
 
-    /* Get control channel memory */
     g_appData.ctrl_shm = ipc_shm_unmanaged_acquire(IPCF_INSTANCE0, CTRL_CHAN_ID);
     if (g_appData.ctrl_shm == NULL) {
         PICC_HANDLE_ERROR(-IPC_SHM_E_NOMEM);
     }
 
-    /* ========================================================================
-     * 4. Initialize PICC infrastructure (trace, service layer)
-     * ======================================================================== */
+    /* 4. Initialize PICC infrastructure (includes PICC_GlobalInit) */
     PICC_InfraInit();
 
-    /* ========================================================================
-     * 4b. Register stack message callback (message dispatcher)
-     * ======================================================================== */
+    /* 4b. Register stack message callback */
     (void)PICC_StackRegisterMsgCallback(PICC_ProcessSingleMessage);
 
-    /* ========================================================================
-     * 5. Initialize IPCF channels (Stack + Heartbeat)
-     * [R6] Heartbeat starts immediately, independent of connection state
-     * ======================================================================== */
+    /* 5. Initialize IPCF channels */
     err = PICC_InitChannel(IPCF_INSTANCE0, 1U);
     if (err != 0) {
         PICC_HANDLE_ERROR(err);
@@ -567,13 +502,6 @@ void PICC_PreOS_Init(void)
     if (err != 0) {
         PICC_HANDLE_ERROR(err);
     }
-
-    /* ========================================================================
-     * NOTE: Application-specific initialization (PICC_Init per app) is now
-     *       performed by each application's own Xxx_Init() function,
-     *       e.g. Pwsm_Init() calls PICC_Init(PICC_APP_PWR, &cfg).
-     *       This is called from Ostask_main.c after PICC_PreOS_Init().
-     * ======================================================================== */
 }
 
 /*==================================================================================================
@@ -581,10 +509,23 @@ void PICC_PreOS_Init(void)
  *==================================================================================================*/
 
 /**
- * @brief Process single decoded message (callback registered with Stack layer)
+ * @brief Process a single received message — dispatch by MessageType
  *
- * 1. Link messages -> PICC_LinkProcessMessage
- * 2. Service messages -> Store to mailbox, then dispatch to service layer
+ * Message processing flow:
+ *   1. LINK_AVAILABLE messages → dispatch to picc_link.c for connection handling
+ *   2. All other messages (Event, Method, Response):
+ *      a. Store to mailbox (PICC_StoreToMailbox) with channelId defense check
+ *      b. Dispatch to service layer (PICC_ServiceProcessMessage) for callback processing
+ *      c. Store callback result into the same mailbox slot (PICC_StoreCallbackResult)
+ *
+ * The mailbox store ALWAYS happens first, regardless of whether a callback
+ * exists. This ensures polling-mode applications can always retrieve data.
+ *
+ * @param[in] header      Protocol header (8 bytes)
+ * @param[in] payload     Payload data after header
+ * @param[in] payloadLen  Payload length
+ * @param[in] instanceId  IPCF instance ID
+ * @param[in] channelId   IPCF channel ID (1 or 2)
  */
 static void PICC_ProcessSingleMessage(const PICC_MsgHeader_t *header,
                                       const uint8 *payload, uint16 payloadLen,
@@ -595,42 +536,47 @@ static void PICC_ProcessSingleMessage(const PICC_MsgHeader_t *header,
     }
 
     if (header->msgType == (uint8)PICC_MSG_LINK_AVAILABLE) {
-        /* Link message — handled by Link layer directly */
+        /* Link management message (connect/disconnect/reconnect) */
         (void)PICC_LinkProcessMessage(header, payload, payloadLen, instanceId, channelId);
     } else {
         uint8  cbResult[PICC_CB_RESULT_MAX_LEN];
         uint16 cbResultLen = 0U;
 
-        /* Store to mailbox FIRST (so polling always works) */
-        PICC_StoreToMailbox(header, payload, payloadLen);
+        /* Step 1: Store to mailbox FIRST — ensures polling-mode apps can read data */
+        PICC_StoreToMailbox(header, payload, payloadLen, channelId);
 
-        /* Dispatch to service layer — callback writes cbResult */
+        /* Step 2: Dispatch to service layer — callback may write cbResult
+         * For Method REQUEST with registered handler: auto-send RESPONSE
+         * For Event WITH_ACK: auto-send EVENT_ACK
+         * For REQUEST_NO_RETURN_WITH_ACK: auto-send ACK */
         (void)PICC_ServiceProcessMessage(header, payload, payloadLen,
                                          instanceId, channelId,
                                          cbResult, &cbResultLen);
 
-        /* Store callback result into the same mailbox slot */
+        /* Step 3: Store callback result into the same mailbox slot
+         * This allows polling apps to retrieve callback-produced data */
         if (cbResultLen > 0U) {
-            PICC_StoreCallbackResult(header, cbResult, cbResultLen);
+            PICC_StoreCallbackResult(header, channelId, cbResult, cbResultLen);
         }
     }
 }
 
 /*==================================================================================================
- *                                         RX Message Task (Event-Driven)
+ *                                         RX Message Task
  *==================================================================================================*/
 
 /**
- * @brief Process received IPCF raw data
- * 
- * Unpacks the stacked format and dispatches individual messages
- * via PICC_StackProcessRx -> PICC_ProcessSingleMessage callback.
+ * @brief Process received IPCF data — unpack stacked messages
  *
- * @param[in] instance  IPCF instance
- * @param[in] chan_id   Channel ID
- * @param[in] buf       Raw data buffer
- * @param[in] size      Buffer size
- * @return PICC_E_OK on success, negative on failure
+ * Called from the RX task for each received IPCF buffer.
+ * Validates minimum size, then passes data to the Stack layer for
+ * unstacking and individual message parsing.
+ *
+ * @param[in] instance  IPCF instance ID
+ * @param[in] chan_id    IPCF channel ID
+ * @param[in] buf       Pointer to received data buffer
+ * @param[in] size      Data size in bytes
+ * @return PICC_E_OK on success, PICC_E_PARAM on invalid data
  */
 static sint8 PICC_ProcessRxData(const uint8 instance, uint8 chan_id,
                                  const void *buf, uint32 size)
@@ -657,13 +603,13 @@ static sint8 PICC_ProcessRxData(const uint8 instance, uint8 chan_id,
 
 /**
  * @brief RX message processing task (event-driven, queue blocking)
- * 
- * Handles received messages from IPCF.
- * This task blocks on the RX queue waiting for messages.
- * 
- * @note This task MUST remain as an independent FreeRTOS task because it uses
- *       xQueueReceive with portMAX_DELAY (infinite blocking).
- *       It is created by OsTask_Creation_All() in Ostask_main.c.
+ *
+ * Blocks on g_rxQueue waiting for IPCF messages from the ISR callback.
+ * For each received message:
+ *   1. Calls PICC_ProcessRxData() to unpack stacked messages
+ *   2. Releases the IPCF managed buffer back to the driver
+ *
+ * @param[in] params  FreeRTOS task parameter (unused)
  */
 void PICC_Rx_Msg_10ms_Task(void *params)
 {
@@ -671,14 +617,11 @@ void PICC_Rx_Msg_10ms_Task(void *params)
     sint8 err;
 
     (void)params;
-    /* Main loop - process received messages */
     while (1) {
         if (xQueueReceive(g_rxQueue, &rxMsg, portMAX_DELAY) == pdPASS) {
             
-            /* Process received message */
             (void)PICC_ProcessRxData(rxMsg.instance, rxMsg.chanId, rxMsg.buf, rxMsg.size);
             
-            /* Release buffer (Managed channel only) */
             if (rxMsg.isManaged != FALSE) {
                 err = ipc_shm_release_buf(rxMsg.instance, rxMsg.chanId, rxMsg.buf);
                 if (err != 0) {
@@ -695,24 +638,12 @@ void PICC_Rx_Msg_10ms_Task(void *params)
  *                                         Error Handling
  *==================================================================================================*/
 
-/**
- * @brief Error handling function
- * 
- * @note Only records error, doesn't block system, allows continued execution for debugging
- */
 void PICC_handle_error(sint8 error, const char *file, int line)
 {
     g_appData.last_error = error;
     g_appData.error_file = file;
     g_appData.error_line = line;
     g_appData.error_count++;
-    
-    /* Only record error, don't block */
-    /* To block for fatal error debugging, uncomment below */
-    /*
-    taskDISABLE_INTERRUPTS();
-    while (1) { }
-    */
 }
 
 #if defined(__cplusplus)

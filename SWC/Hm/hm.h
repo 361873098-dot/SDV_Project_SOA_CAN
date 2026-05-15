@@ -1,113 +1,173 @@
-/********************************************************************************
-* COPYRIGHT (C) Vitesco Technologies 2025
-* ALL RIGHTS RESERVED.
-*
-* The reproduction, transmission or use of this document or its
-* contents is not permitted without express written authority.
-* Offenders will be liable for damages. All rights, including rights
-* created by patent grant or registration of a utility model or design,
-* are reserved.
-*********************************************************************************
-*
-*  File name:           $Source: hm.h $
-*  Revision:            $Revision: 1.0 $
-*  Author:              $Author: Li Song (uic59152)  $
-*  Module acronym:      PWSM
-*  Specification:
-*  Date:                $Date: 2026/4/18  $
-*
-*  Description:     This Unit processes health management module
-*
-*********************************************************************************
-*
-*  Changes:
-*
-*
-*********************************************************************************/
+/**
+ * @file hm.h
+ * @brief Health Management Module — Public Interface
+ *
+ * Provides health monitoring data structures and API for the HM module.
+ *
+ * The HM module registers two PICC applications:
+ *   1. Heartbeat Provider (ProviderID=21): sends periodic Ping/Pong
+ *   2. Health Reporter (ProviderID=81): reports real-time info and fault events
+ *
+ * Copyright 2025 Vitesco Technologies
+ * All Rights Reserved.
+ */
+
+#ifndef HM_H
+#define HM_H
+
+#if defined(__cplusplus)
+extern "C" {
+#endif
 
 /***********************************************************************************************************************
 *  include files
 ***********************************************************************************************************************/
 #include "Platform.h"
 
-typedef struct
-{
-    uint8 PartitionID; 
-    uint8 NrOfPartitions; 
-    uint8 PartitionState; 
-    uint8 Reserved[4];
-    uint8 NrOfRealTimeData;
-}  HealthRealTimeData_st;
+/*==================================================================================================
+*                                         Data Structures — Real-Time Info
+*==================================================================================================*/
 
+/**
+ * @brief Per-partition real-time health data
+ *
+ * Describes the state and data count of a single partition
+ * (e.g., M-Core partition or A-Core partition).
+ */
 typedef struct
 {
-	uint8 PartitionId;
-	uint8 Reserved[3];
-	HealthRealTimeData_st RealTimeData;
+    uint8 PartitionID;       /**< Partition identifier (1=M-Core, 2=A-Core) */
+    uint8 NrOfPartitions;   /**< Total number of partitions in the system */
+    uint8 PartitionState;   /**< Current partition state (running, shutdown, etc.) */
+    uint8 Reserved[4];      /**< Reserved for future use */
+    uint8 NrOfRealTimeData; /**< Number of real-time data entries following */
+} HealthRealTimeData_st;
+
+/**
+ * @brief Real-time information report payload
+ *
+ * Wraps partition ID and its real-time health data.
+ * Sent via PICC Method response when A-Core queries real-time info.
+ */
+typedef struct
+{
+    uint8 PartitionId;               /**< Partition identifier */
+    uint8 Reserved[3];               /**< Reserved for alignment */
+    HealthRealTimeData_st RealTimeData; /**< Nested real-time data */
 } RealTimeInfo_st;
 
+/*==================================================================================================
+*                                         Data Structures — Fault / Hazard
+*==================================================================================================*/
 
+/**
+ * @brief Single fault/hazard entry
+ *
+ * Describes one fault event with its ID, associated values, category,
+ * detection source, frequency, and severity. Designed to be packed
+ * for transmission over IPCF without padding.
+ */
 typedef struct __attribute__((packed))
 {
-    uint8 ID[16];		/*故障唯一ID，各模块自行设计，ascii码形式*/
-    uint32 Value[4];	/*最多4个32bits故障值，各个模块自行设计*/
-    uint8 Category;		/*故障种类，系统自行设计*/
-    uint8 PartitionID;	/*故障的发生Partition*/
-    uint8 DetectedBy;	/*故障由哪一个模块/渠道发现，系统自行设计，比如DTC，总线*/
-    uint8 Frequency;	/*故障发生次数*/
-    uint8 Severity;		/*故障严重程度，系统自行设计*/
-    uint8 Reserved[3];
-}HealthHazard_st;
+    uint8  ID[16];      /**< Unique fault ID in ASCII format, designed by each module */
+    uint32 Value[4];    /**< Up to 4 x 32-bit fault values, module-specific */
+    uint8  Category;    /**< Fault category, system-defined */
+    uint8  PartitionID; /**< Partition where the fault occurred */
+    uint8  DetectedBy;  /**< Module/channel that detected the fault (e.g., DTC, bus) */
+    uint8  Frequency;   /**< Number of fault occurrences */
+    uint8  Severity;    /**< Fault severity level, system-defined */
+    uint8  Reserved[3]; /**< Reserved for alignment */
+} HealthHazard_st;
 
+/*==================================================================================================
+*                                         Data Structures — Health Indicator
+*==================================================================================================*/
+
+/**
+ * @brief Health indicator summary
+ *
+ * Aggregated health metrics for a partition: performance, reliability,
+ * partition count, state, and health index.
+ */
 typedef struct __attribute__((packed))
 {
-    uint8 Performance;/*性能，暂时未使用*/
-    uint8 Reliability;/*可靠性，暂时未使用*/
-    uint8 NrOfPartitions;/*一共多少个Partition，目前是A核1个，M核1个，一共2个*/
-    uint8 PartitionState;/*Partition的状态*/
-    uint8 HealthIndex;/*健康指数，暂时未使用*/
-    uint8 Reserved[3];
-}HealthIndicator_st;
+    uint8 Performance;    /**< Performance metric (currently unused) */
+    uint8 Reliability;   /**< Reliability metric (currently unused) */
+    uint8 NrOfPartitions;/**< Total number of partitions (A-Core=1, M-Core=1, total=2) */
+    uint8 PartitionState;/**< Current partition state */
+    uint8 HealthIndex;   /**< Health index (currently unused) */
+    uint8 Reserved[3];   /**< Reserved for alignment */
+} HealthIndicator_st;
 
+/*==================================================================================================
+*                                         Data Structures — Full Health Info
+*==================================================================================================*/
+
+/**
+ * @brief Complete health information snapshot
+ *
+ * Contains a timestamp, health indicator summary, per-category
+ * hazard counts, and up to 10 fault entries.
+ * Designed to be packed for IPCF transmission.
+ */
 typedef struct __attribute__((packed))
 {
-    uint64 Timestamp; /*时间戳*/
-    HealthIndicator_st Indicator; /*健康指标*/
-    uint8 PartitionID;/*代表M核的Partition Id，目前是1*/
-    uint16 CategoryMaxNrOfHazard[3]; /*CategoryMaxNrOfHazard[0]被CP的WDGM监控的SWC个数，[1],[2]未使用*/
-    uint8 Reserved[4];
-    uint8 NrOfHazards;/*故障信息个数*/
-    HealthHazard_st Hazards[10]; /*故障信息*/
-}HealthInfo_st;
+    uint64 Timestamp;                     /**< Timestamp of the health snapshot */
+    HealthIndicator_st Indicator;          /**< Aggregated health indicators */
+    uint8 PartitionID;                    /**< M-Core Partition ID (currently 1) */
+    uint16 CategoryMaxNrOfHazard[3];      /**< [0]=SWC count monitored by CP WDGM, [1],[2] unused */
+    uint8 Reserved[4];                     /**< Reserved for alignment */
+    uint8 NrOfHazards;                    /**< Number of valid fault entries in Hazards[] */
+    HealthHazard_st Hazards[10];          /**< Fault information array (max 10 entries) */
+} HealthInfo_st;
 
+/**
+ * @brief PICC health information message payload
+ *
+ * Top-level structure sent as the payload for the health report Event.
+ * Contains partition ID and the full health info snapshot.
+ * Designed to be packed for IPCF transmission.
+ */
 typedef struct __attribute__((packed))
 {
-    uint8   PartitionId;/*代表M核的Partition Id，目前是1*/            
-    uint8   Reserved[3];                
-    HealthInfo_st     HealthInfo;/*健康数据*/
+    uint8   PartitionId;           /**< M-Core Partition ID (currently 1) */
+    uint8   Reserved[3];           /**< Reserved for alignment */
+    HealthInfo_st HealthInfo;      /**< Complete health data */
 } PICCHealthInfo_st;
 
+/*==================================================================================================
+*                                         Function Declarations
+*==================================================================================================*/
 
-/***********************************************************************************************************************
- *  Function name    : Hm_Init()
+/**
+ * @brief Initialize the Health Management module
  *
- *  Description      : Initialize HM module and register with PICC driver
+ * Registers two PICC applications with the PICC driver:
+ *   1. Heartbeat Provider (PICC_ID_HEALTH_HB_LOCAL=21, channel 1):
+ *      Sends periodic Ping/Pong for channel health detection.
+ *   2. Health Reporter (PICC_ID_HEALTH_RPT_LOCAL=81, channel 2):
+ *      Reports real-time info (Method) and fault events (Event).
  *
- *  List of arguments: none
- *
- *  Return value     : noe
- *
- ***********************************************************************************************************************/
-extern void Hm_Init(void);
+ * Must be called after PICC_PreOS_Init() and before the scheduler starts.
+ */
+void Hm_Init(void);
 
-/***********************************************************************************************************************
- *  Function name    : Hm_Main()
+/**
+ * @brief Health Management 10ms periodic main function
  *
- *  Description      : Implements all activities of the health State Manager.
+ * Called from TASK_M0_10MS() every 10ms.
  *
- *  List of arguments: none
+ * Internally runs three sub-tasks:
+ *   1. Hm_HeartBeat_Task() — Ping/Pong transmission and timeout detection
+ *   2. Hm_ReportRealTimeInfo_Task() — Respond to A-Core real-time info queries
+ *   3. Hm_ReportFault_Task() — Edge-triggered fault event reporting
  *
- *  Return value     : noe
- *
- ***********************************************************************************************************************/
-extern void Hm_Main(void);
+ * Also manages PMIC (VR55XX) fault flag register read/clear cycle.
+ */
+void Hm_Main(void);
+
+#if defined(__cplusplus)
+}
+#endif
+
+#endif /* HM_H */

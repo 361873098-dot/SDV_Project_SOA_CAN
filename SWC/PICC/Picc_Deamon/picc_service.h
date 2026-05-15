@@ -93,10 +93,10 @@ typedef void (*PICC_ResponseCallback_t)(uint8 providerId, uint8 methodId,
  *==================================================================================================*/
 
 /** Maximum number of registered Event handlers */
-#define PICC_MAX_EVENT_HANDLERS     (4U)
+#define PICC_MAX_EVENT_HANDLERS     (24U)
 
 /** Maximum number of registered Method handlers */
-#define PICC_MAX_METHOD_HANDLERS    (4U)
+#define PICC_MAX_METHOD_HANDLERS    (24U)
 
 /*==================================================================================================
  *                                         Function Declarations - Internal Init (called by PICC_Init)

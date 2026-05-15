@@ -108,7 +108,7 @@ void DiagMgmt_Init(void)
         .eventHandler           = NULL   /* No Event handler needed */
     };
 
-    (void)PICC_Init(PICC_APP_RSV0, &diagMgmt_cfg);
+    (void)PICC_Init(&diagMgmt_cfg);
 
     /* Initialize state */
     DiagMgmt_PeriodCounter = 0U;
@@ -171,7 +171,7 @@ void DiagMgmt_Main(void)
             uint8 payload[1];
             payload[0] = currentInput;
 
-            (void)PICC_SendEvent(PICC_APP_RSV0,
+            (void)PICC_SendEvent(PICC_ID_DIAGMGMT_LOCAL,
                                  DIAG_MGMT_EVENT_DOIP_ACT_LINE,
                                  payload,
                                  1U,

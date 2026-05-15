@@ -177,7 +177,7 @@ static sint8 SOA_SendNotifier(uint8 svcIdx)
     totalLen = SOA_HEADER_SIZE + dataLen;
 
     /* Send via PICC Event (IPC EventID=3, WITHOUT_ACK per M-core constraint) */
-    return PICC_SendEvent(PICC_APP_SOA, SOA_IPC_EVENT_ID_FOR_NOTIF,
+    return PICC_SendEvent(PICC_ID_SOA_LOCAL, SOA_IPC_EVENT_ID_FOR_NOTIF,
                           s_soaTxBuf, totalLen, PICC_EVENT_WITHOUT_ACK);
 }
 
@@ -248,7 +248,7 @@ static void SOA_SendAllNotifierInitValues(void)
     /* Phase 2: Send the entire batch in ONE PICC_SendEvent call */
     if (batchOffset > 0U)
     {
-        (void)PICC_SendEvent(PICC_APP_SOA, SOA_IPC_EVENT_ID_FOR_NOTIF,
+        (void)PICC_SendEvent(PICC_ID_SOA_LOCAL, SOA_IPC_EVENT_ID_FOR_NOTIF,
                              s_soaBatchBuf, batchOffset, PICC_EVENT_WITHOUT_ACK);
     }
 }
@@ -347,7 +347,7 @@ static void SOA_HandleMethodRequest(const uint8 *reqData, uint16 reqLen, uint8 i
         SOA_SerializeHeader(s_methodRspBuf, &rspHdr);
         ipcReturnCode = 0x01U;
 
-        (void)PICC_MethodResponse(PICC_APP_SOA, SOA_IPC_METHOD_ID_FOR_RR,
+        (void)PICC_MethodResponse(PICC_ID_SOA_LOCAL, SOA_IPC_METHOD_ID_FOR_RR,
                                   ipcSessionId, ipcReturnCode,
                                   s_methodRspBuf, SOA_HEADER_SIZE);
         return;
@@ -426,7 +426,7 @@ static void SOA_HandleMethodRequest(const uint8 *reqData, uint16 reqLen, uint8 i
     rspTotalLen = SOA_HEADER_SIZE + rspDataLen;
 
     /* Send response via PICC (IPC MethodID=1, echo IPC sessionId) */
-    (void)PICC_MethodResponse(PICC_APP_SOA, SOA_IPC_METHOD_ID_FOR_RR,
+    (void)PICC_MethodResponse(PICC_ID_SOA_LOCAL, SOA_IPC_METHOD_ID_FOR_RR,
                               ipcSessionId, ipcReturnCode,
                               s_methodRspBuf, rspTotalLen);
 }
@@ -440,7 +440,7 @@ static void SOA_PollMethodRequests(void)
     uint8  ipcSessionId = 0U;
 
     /* Poll for Method data on IPC MethodID=1 */
-    if (PICC_GetMethodData(PICC_APP_SOA, SOA_IPC_METHOD_ID_FOR_RR,
+    if (PICC_GetMethodData(PICC_ID_SOA_LOCAL, SOA_IPC_METHOD_ID_FOR_RR,
                            s_methodRxBuf, SOA_MAX_MSG_SIZE, &actualLen,
                            &ipcSessionId, NULL, NULL) == PICC_E_OK)
     {
@@ -473,7 +473,7 @@ void SoaAdapter_Init(void)
     (void)memset(&s_soaState, 0, sizeof(s_soaState));
     s_soaState.prevLinkState = PICC_LINK_STATE_DISCONNECTED;
 
-    (void)PICC_Init(PICC_APP_SOA, &soa_cfg);
+    (void)PICC_Init(&soa_cfg);
 
     s_soaState.isInitialized = TRUE;
 }
@@ -491,7 +491,7 @@ void SoaAdapter_Main(void)
     }
 
     /* 1. Check application-level link state */
-    curLinkState = PICC_GetAppLinkState(PICC_APP_SOA);
+    curLinkState = PICC_GetAppLinkState(PICC_ID_SOA_LOCAL);
 
     /* 2. Detect DISCONNECTED → CONNECTED transition: send initial values */
     if ((curLinkState == PICC_LINK_STATE_CONNECTED) &&

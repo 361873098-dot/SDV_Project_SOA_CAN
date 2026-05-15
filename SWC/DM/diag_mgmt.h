@@ -134,7 +134,7 @@ extern volatile uint8 Test_input;
 /**
  * @brief Initialize the Diagnostic Management module
  *
- * Registers with the PICC driver using PICC_APP_RSV0 slot:
+ * Registers with the PICC driver using PICC_ID_DIAGMGMT_LOCAL slot:
  *   - Role: SERVER (M-Core is the service provider)
  *   - localId  = DIAG_MGMT_PROVIDER_ID (52) — M-Core Server
  *   - remoteId = DIAG_MGMT_CONSUMER_ID (60) — A-Core Client

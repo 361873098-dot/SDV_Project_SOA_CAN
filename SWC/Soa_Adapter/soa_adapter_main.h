@@ -30,7 +30,7 @@ extern "C"{
 /**
  * @brief Initialize the SOA Adapter module
  *
- * Registers the SOA application with the PICC driver (PICC_APP_SOA)
+ * Registers the SOA application with the PICC driver (PICC_ID_SOA_LOCAL)
  * and initializes internal state (Notifier cache, link state tracking).
  *
  * Prerequisites:

@@ -156,6 +156,14 @@ static sint8 PICC_ServiceSendMessage(const PICC_MsgHeader_t *header,
 
 /**
  * @brief Handle Event notification (route to registered handlers)
+ *
+ * If Event type is WITH_ACK (0x08): automatically sends EVENT_ACK (0x82)
+ * back to the sender before routing to registered handlers.
+ * Per IPCF protocol: EVENT_ACK is a middleware-level confirmation that
+ * the notification was received. Application layer is not involved.
+ *
+ * NOTE: When M-Core sends Event, it uses WITHOUT_ACK (0x09) because
+ * M-Core cannot synchronously wait for ACK (real-time constraints).
  */
 static sint8 PICC_ServiceHandleEvent(const PICC_MsgHeader_t *header,
                                      const uint8 *payload, uint16 len,
@@ -167,7 +175,7 @@ static sint8 PICC_ServiceHandleEvent(const PICC_MsgHeader_t *header,
     /* Initialize callback result to empty */
     *cbResultLen = 0U;
 
-    /* If Event with ACK, auto reply EVENT_ACK */
+    /* If Event with ACK, auto reply EVENT_ACK (middleware-level) */
     if (header->msgType == (uint8)PICC_MSG_NOTIFICATION_WITH_ACK) {
         (void)PICC_ServiceSendAck((uint8)PICC_MSG_EVENT_ACK,
                                   header->providerId,
@@ -177,7 +185,7 @@ static sint8 PICC_ServiceHandleEvent(const PICC_MsgHeader_t *header,
                                   instanceId, channelId);
     }
 
-    /* Route to handler matching ProviderID */
+    /* Route to all handlers matching ProviderID (multiple handlers possible) */
     for (i = 0U; i < PICC_MAX_EVENT_HANDLERS; i++) {
         if (g_eventHandlers[i].isUsed && 
             g_eventHandlers[i].providerId == header->providerId &&
@@ -193,6 +201,21 @@ static sint8 PICC_ServiceHandleEvent(const PICC_MsgHeader_t *header,
 
 /**
  * @brief Handle Method request (route to registered handlers)
+ *
+ * Processing logic depends on MessageType:
+ *   - REQUEST_NO_RETURN_WITH_ACK (0x06): Auto-reply ACK, then route to handler
+ *   - REQUEST_NO_RETURN_WITHOUT_ACK (0x07): Route to handler, no ACK
+ *   - REQUEST (0x05): Route to handler; if handler found, auto-send RESPONSE
+ *
+ * Auto-RESPONSE behavior for REQUEST (0x05):
+ *   - If a methodHandler callback is registered: the callback executes and
+ *     the RESPONSE is sent automatically with the callback's return data.
+ *   - If NO callback is registered (polling mode): the application reads
+ *     request data via PICC_GetMethodData() and sends the RESPONSE manually
+ *     via PICC_MethodResponse(). The driver does NOT auto-send in this case.
+ *
+ * This design ensures both callback-mode and polling-mode applications
+ * work correctly without conflict.
  */
 static sint8 PICC_ServiceHandleRequest(const PICC_MsgHeader_t *header,
                                        const uint8 *payload, uint16 len,
@@ -208,7 +231,7 @@ static sint8 PICC_ServiceHandleRequest(const PICC_MsgHeader_t *header,
     /* Initialize callback result to empty */
     *cbResultLen = 0U;
 
-    /* If REQUEST_NO_RETURN_WITH_ACK, auto reply ACK */
+    /* If REQUEST_NO_RETURN_WITH_ACK, auto reply ACK (middleware-level confirmation) */
     if (header->msgType == (uint8)PICC_MSG_REQUEST_NO_RETURN_WITH_ACK) {
         (void)PICC_ServiceSendAck((uint8)PICC_MSG_ACK,
                                   header->providerId,
@@ -218,7 +241,7 @@ static sint8 PICC_ServiceHandleRequest(const PICC_MsgHeader_t *header,
                                   instanceId, channelId);
     }
 
-    /* Route to handler matching ProviderID */
+    /* Route to handler matching ProviderID — only first match is executed */
     for (i = 0U; i < PICC_MAX_METHOD_HANDLERS; i++) {
         if (g_methodHandlers[i].isUsed && 
             g_methodHandlers[i].localProviderId == header->providerId &&
