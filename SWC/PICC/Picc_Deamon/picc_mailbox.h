@@ -37,11 +37,17 @@ extern "C" {
  *
  * These defaults are applied automatically in PICC_MailboxRegisterApp()
  * when the application does not explicitly specify slot counts.
+ *
+ * TUNING GUIDE: Each slot ≈ 52 bytes. Total slot pool = PICC_SLOT_POOL_SIZE × 52.
+ *   - 2 slots/type: 120 apps × 4 = 480 slots ≈ 25 KB  (conservative, most apps only have 1-3 IDs)
+ *   - 4 slots/type:  60 apps × 8 = 480 slots ≈ 25 KB  (moderate headroom per app)
+ *   - 6 slots/type:  40 apps ×12 = 480 slots ≈ 25 KB  (generous, fewer apps)
+ * Adjust these macros AND PICC_SLOT_POOL_SIZE together to match your system scale.
  */
-#define PICC_SERVER_DEFAULT_METHOD_SLOTS    (6U)
-#define PICC_SERVER_DEFAULT_EVENT_SLOTS     (6U)
-#define PICC_CLIENT_DEFAULT_RESPONSE_SLOTS  (6U)
-#define PICC_CLIENT_DEFAULT_EVENT_SLOTS     (6U)
+#define PICC_SERVER_DEFAULT_METHOD_SLOTS    (2U)
+#define PICC_SERVER_DEFAULT_EVENT_SLOTS     (2U)
+#define PICC_CLIENT_DEFAULT_RESPONSE_SLOTS  (2U)
+#define PICC_CLIENT_DEFAULT_EVENT_SLOTS     (2U)
 
 /** Legacy macro kept for backward compatibility — no longer used by role-based logic */
 #define PICC_DEFAULT_SLOTS                  (2U)
@@ -102,9 +108,19 @@ sint8 PICC_MailboxGetAppConfig(uint8 localId, const PICC_AppConfig_t **config);
  * @brief Get the linkSharedIdx for a given localId
  *
  * @param[in] localId Application local ID
- * @return linkSharedIdx (0xFF = not allocated / Server role)
+ * @return linkSharedIdx (0xFFFF = not allocated yet)
  */
-uint8 PICC_MailboxGetLinkSharedIdx(uint8 localId);
+uint16 PICC_MailboxGetLinkSharedIdx(uint8 localId);
+
+/**
+ * @brief Set the linkSharedIdx for a given localId
+ *
+ * Called by PICC_Init() after PICC_LinkRegisterShared() returns the pool index.
+ *
+ * @param[in] localId        Application local ID
+ * @param[in] linkSharedIdx  Link pool index from PICC_LinkRegisterShared()
+ */
+void PICC_MailboxSetLinkSharedIdx(uint8 localId, uint16 linkSharedIdx);
 
 /*==================================================================================================
  *                                  Mailbox Store (incoming messages)

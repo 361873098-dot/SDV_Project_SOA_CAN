@@ -240,7 +240,7 @@ void PICC_DiagRecordAddTx(const uint8 *data, uint32 len)
 /**
  * @brief Update link state diagnostic fields in g_diagRecord_Debug
  *
- * Iterates over all 128 registry entries to find registered apps,
+ * Iterates over all PICC_REGISTRY_SIZE registry entries to find registered apps,
  * then queries their link state. Only registered apps have valid states.
  */
 void PICC_DiagUpdateLinkState(void)

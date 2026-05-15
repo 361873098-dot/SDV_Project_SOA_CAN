@@ -46,8 +46,11 @@ extern "C" {
  *                                         Registry Configuration
  *==================================================================================================*/
 
-/** Maximum registry size — supports localId/remoteId 1~127 as direct array index */
-#define PICC_REGISTRY_SIZE      (128U)
+/** Maximum registry size — supports localId/remoteId 1~254 as direct array index.
+ *  Set to 256 to accommodate 120+ applications per protocol ID range [1, 254].
+ *  All internal arrays (g_appRegistry, g_remoteToLocal, g_appConfigs, appLinkState)
+ *  are sized by this macro. Increasing it linearly increases .bss RAM usage. */
+#define PICC_REGISTRY_SIZE      (256U)
 
 /*==================================================================================================
  *                                         Application Configuration
@@ -124,7 +127,7 @@ typedef struct {
  * to call this function once during its own Xxx_Init().
  *
  * The localId from config is used as a direct index into the internal
- * registry (g_appRegistry[localId]). Valid range: 1~127.
+ * registry (g_appRegistry[localId]). Valid range: 1~254.
  *
  * Prerequisites:
  *   - PICC_PreOS_Init() must have been called first.
@@ -133,7 +136,7 @@ typedef struct {
  *                      optional Method/Event callbacks, slot counts).
  *
  * @return PICC_E_OK        on success
- * @return PICC_E_PARAM     if config is NULL or localId/remoteId out of range [1, 127]
+ * @return PICC_E_PARAM     if config is NULL or localId/remoteId out of range [1, 254]
  * @return PICC_E_NOT_INIT  if PICC infrastructure (mailbox) not yet initialized
  * @return PICC_E_DUPLICATE if localId is already registered
  * @return PICC_E_NOMEM     if slot pool exhausted

@@ -3,9 +3,9 @@
  * @brief PICC Mailbox Module — Implementation
  *
  * Manages per-application receive mailboxes:
- *   - App registry (g_appRegistry[128], indexed by localId)
- *   - Global slot pool (g_slotPool[128], allocated on-demand)
- *   - Remote-to-local ID mapping (g_remoteToLocal[128])
+ *   - App registry (g_appRegistry[PICC_REGISTRY_SIZE], indexed by localId)
+ *   - Global slot pool (g_slotPool[PICC_SLOT_POOL_SIZE], allocated on-demand)
+ *   - Remote-to-local ID mapping (g_remoteToLocal[PICC_REGISTRY_SIZE])
  *   - Incoming message routing with channelId defense check
  *   - Polling read interface for Method/Response/Event data
  *
@@ -30,8 +30,10 @@ extern "C" {
 /** Max payload bytes stored per slot */
 #define PICC_RX_MAX_DATA_LEN    (32U)
 
-/** Total slot pool size */
-#define PICC_SLOT_POOL_SIZE     (128U)
+/** Total slot pool size — supports 120+ apps at 4 slots/app (2+0+2 or 0+2+2).
+ *  Each PICC_RxSlot_t ≈ 52 bytes, so 512 slots ≈ 26.6 KB.
+ *  Increase if you raise PICC_SERVER/CLIENT_DEFAULT_xxx_SLOTS above 2. */
+#define PICC_SLOT_POOL_SIZE     (512U)
 
 /*==================================================================================================
  *                                         Internal Types
@@ -52,11 +54,11 @@ typedef struct {
 /**
  * @brief Per-application registry entry (20 bytes, aligned)
  *
- * Field layout: uint8 fields (offset 0~11), uint16 fields (offset 12~19)
+ * Field layout: uint8 fields (offset 0~9), uint16 fields (offset 10~19)
  * Ensures all uint16 fields are naturally aligned on 2-byte boundary.
  */
 typedef struct {
-    /* ---- uint8 fields (offset 0~11) ---- */
+    /* ---- uint8 fields (offset 0~9) ---- */
     uint8    isRegistered;       /**< 1B, offset  0 */
     uint8    remoteId;           /**< 1B, offset  1 */
     uint8    role;               /**< 1B, offset  2 */
@@ -67,9 +69,8 @@ typedef struct {
     uint8    methodVictim;       /**< 1B, offset  7 */
     uint8    responseVictim;     /**< 1B, offset  8 */
     uint8    eventVictim;        /**< 1B, offset  9 */
-    uint8    linkSharedIdx;      /**< 1B, offset 10 — 0xFF=not allocated (Server) */
-    uint8    _pad;               /**< 1B, offset 11 — alignment padding */
-    /* ---- uint16 fields (offset 12~19) ---- */
+    /* ---- uint16 fields (offset 10~19) ---- */
+    uint16   linkSharedIdx;      /**< 2B, offset 10 — 0xFFFF=not allocated yet */
     uint16   linkReqPeriodMs;    /**< 2B, offset 12 */
     uint16   methodSlotStart;    /**< 2B, offset 14 */
     uint16   responseSlotStart;  /**< 2B, offset 16 */
@@ -267,8 +268,7 @@ void PICC_GlobalInit(void)
         g_appRegistry[i].methodVictim = 0U;
         g_appRegistry[i].responseVictim = 0U;
         g_appRegistry[i].eventVictim = 0U;
-        g_appRegistry[i].linkSharedIdx = 0xFFU;
-        g_appRegistry[i]._pad = 0U;
+        g_appRegistry[i].linkSharedIdx = 0xFFFFU;
         g_appRegistry[i].linkReqPeriodMs = 0U;
         g_appRegistry[i].methodSlotStart = 0U;
         g_appRegistry[i].responseSlotStart = 0U;
@@ -399,7 +399,7 @@ sint8 PICC_MailboxRegisterApp(const PICC_AppConfig_t *config)
     entry->methodVictim      = 0U;
     entry->responseVictim    = 0U;
     entry->eventVictim       = 0U;
-    entry->linkSharedIdx     = 0xFFU; /* Will be set by link layer if Client */
+    entry->linkSharedIdx     = 0xFFFFU; /* Will be set by PICC_Init() after link registration */
     entry->linkReqPeriodMs   = config->Client_linkReq_PeriodMs;
 
     /* Allocate slot ranges from pool */
@@ -438,12 +438,20 @@ sint8 PICC_MailboxGetAppConfig(uint8 localId, const PICC_AppConfig_t **config)
     return PICC_E_OK;
 }
 
-uint8 PICC_MailboxGetLinkSharedIdx(uint8 localId)
+uint16 PICC_MailboxGetLinkSharedIdx(uint8 localId)
 {
     if (localId == 0U || localId >= PICC_REGISTRY_SIZE) {
-        return 0xFFU;
+        return 0xFFFFU;
     }
     return g_appRegistry[localId].linkSharedIdx;
+}
+
+void PICC_MailboxSetLinkSharedIdx(uint8 localId, uint16 linkSharedIdx)
+{
+    if (localId == 0U || localId >= PICC_REGISTRY_SIZE) {
+        return;
+    }
+    g_appRegistry[localId].linkSharedIdx = linkSharedIdx;
 }
 
 /*==================================================================================================

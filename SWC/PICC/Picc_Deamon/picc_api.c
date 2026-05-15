@@ -29,7 +29,7 @@ extern "C" {
 sint8 PICC_Init(const PICC_AppConfig_t *config)
 {
     sint8 ret;
-    sint8 linkIdx;
+    sint16 linkIdx;
 
     if (config == NULL) {
         return PICC_E_PARAM;
@@ -51,27 +51,19 @@ sint8 PICC_Init(const PICC_AppConfig_t *config)
         return ret;
     }
 
-    /* 2. Register Link (shared pool, Server skips allocation) */
+    /* 2. Register Link (shared pool — both Server and Client allocate an entry)
+     *   Server: initial state = DISCONNECTED (passively waits for Client connect)
+     *   Client: initial state = CONNECTING   (actively sends connect requests) */
     linkIdx = PICC_LinkRegisterShared(config->localId, config->remoteId,
                                        config->channelId, (uint8)config->role,
                                        config->Client_linkReq_PeriodMs);
     if (linkIdx < 0) {
-        /* Link registration failed — but we can't easily undo mailbox registration
-         * in the new architecture. Log error but continue. */
-        /* Note: Server role returns PICC_E_OK (0), so linkIdx=0 is valid.
-         * Only negative values indicate actual failure. */
+        /* Link registration failed — but we can't easily undo mailbox registration.
+         * Log error but continue. Only negative values indicate actual failure. */
     }
-    /* For Client role: store linkSharedIdx in appRegistry */
-    if ((uint8)config->role != (uint8)PICC_ROLE_SERVER) {
-        /* We need to update the linkSharedIdx in the app registry.
-         * Access g_appRegistry indirectly through the mailbox module. */
-        /* The linkSharedIdx is already 0xFF (not allocated) by default for Server.
-         * For Client, we need to set it. However, g_appRegistry is private to
-         * picc_mailbox.c. We use a simple approach: the linkIdx returned is the
-         * pool index, which we can store. */
-        /* Since PICC_AppEntry_t.linkSharedIdx is in mailbox.c, we need an accessor.
-         * For simplicity, the mailbox stores this during registration.
-         * Actually, let's just pass the linkIdx through a mailbox function. */
+    /* Store linkSharedIdx for both Server and Client roles */
+    if (linkIdx >= 0) {
+        PICC_MailboxSetLinkSharedIdx(config->localId, (uint16)linkIdx);
     }
 
     /* 3. Register Method handler (optional) */
@@ -106,7 +98,7 @@ sint8 PICC_SendEvent(uint8 localId, uint8 eventId,
         return PICC_E_PARAM;
     }
 
-    if (PICC_LinkGetStateByIds(cfg->localId, cfg->remoteId) != PICC_LINK_STATE_CONNECTED) {
+    if (PICC_LinkGetStateByIdx(PICC_MailboxGetLinkSharedIdx(cfg->localId)) != PICC_LINK_STATE_CONNECTED) {
         return PICC_E_NOT_CONNECTED;
     }
 
@@ -130,7 +122,7 @@ uint8 PICC_MethodRequest(uint8 localId, uint8 methodId,
         return 0U;
     }
 
-    if (PICC_LinkGetStateByIds(cfg->localId, cfg->remoteId) != PICC_LINK_STATE_CONNECTED) {
+    if (PICC_LinkGetStateByIdx(PICC_MailboxGetLinkSharedIdx(cfg->localId)) != PICC_LINK_STATE_CONNECTED) {
         return 0U;
     }
 
@@ -208,7 +200,7 @@ PICC_LinkState_e PICC_GetAppLinkState(uint8 localId)
         return PICC_LINK_STATE_DISCONNECTED;
     }
 
-    return PICC_LinkGetStateByIds(cfg->localId, cfg->remoteId);
+    return PICC_LinkGetStateByIdx(PICC_MailboxGetLinkSharedIdx(cfg->localId));
 }
 
 #if defined(__cplusplus)

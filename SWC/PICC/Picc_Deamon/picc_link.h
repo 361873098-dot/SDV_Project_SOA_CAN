@@ -30,8 +30,11 @@ extern "C" {
 /** Maximum supported physical channels */
 #define PICC_MAX_CHANNELS               (2U)
 
-/** Maximum shared link pool size */
-#define PICC_LINK_SHARED_POOL_SIZE      (10U)
+/** Maximum shared link pool size — one entry per (remoteId, channelId) pair.
+ *  Both Server and Client apps allocate a link entry (Server needs it for
+ *  link state tracking, disconnect handling, and SendEvent guard check).
+ *  256 entries supports 120+ apps with room for deduplication sharing. */
+#define PICC_LINK_SHARED_POOL_SIZE      (256U)
 
 /*==================================================================================================
  *                                         Enum Types
@@ -65,9 +68,10 @@ typedef struct {
 /**
  * @brief Shared link context — deduplicated by (remoteId, channelId)
  *
- * Multiple Client apps connecting to the same (remoteId, channelId) share
- * one link context. refCount tracks how many apps share this link.
- * Server apps do NOT allocate a link pool entry (linkSharedIdx = 0xFF).
+ * Both Server and Client apps allocate a link entry. Multiple apps with
+ * the same (remoteId, channelId, role) share one link context via refCount.
+ * Server needs link entry for: state tracking, disconnect/reconnect handling,
+ * and guarding PICC_SendEvent()/PICC_MethodResponse() with link state check.
  */
 typedef struct {
     PICC_LinkConfig_t      config;           /**< Link configuration */
@@ -93,20 +97,23 @@ void PICC_LinkLayerInit(void);
 /**
  * @brief Register a shared link for an application
  *
- * Server role: Sets linkSharedIdx=0xFF in the app registry and returns.
- * Client role: Finds or creates a shared link by (remoteId, channelId).
- *   - If a link already exists for this (remoteId, channelId), increments
- *     refCount and shares it.
+ * Both Server and Client roles allocate a link pool entry.
+ *   - Finds or creates a shared link by (remoteId, channelId, role).
+ *   - If a link already exists for this (remoteId, channelId, role),
+ *     increments refCount and shares it.
  *   - Otherwise, allocates a new link from the pool.
+ *
+ * Server: initial state = DISCONNECTED (waits for Client connect request).
+ * Client: initial state = CONNECTING (starts sending link-connect requests).
  *
  * @param[in] localId          Application local ID
  * @param[in] remoteId         Remote peer ID
  * @param[in] channelId        IPCF channel ID
  * @param[in] role              Application role
- * @param[in] linkReqPeriodMs  Link request period (ms)
- * @return PICC_E_OK on success, negative on failure
+ * @param[in] linkReqPeriodMs  Link request period (ms), only used by Client
+ * @return Non-negative linkSharedIdx on success, negative on failure
  */
-sint8 PICC_LinkRegisterShared(uint8 localId, uint8 remoteId,
+sint16 PICC_LinkRegisterShared(uint8 localId, uint8 remoteId,
                                uint8 channelId, uint8 role,
                                uint16 linkReqPeriodMs);
 
@@ -130,7 +137,23 @@ sint8 PICC_LinkHandleRequest(const PICC_MsgHeader_t *header,
                              uint8 instanceId, uint8 channelId);
 
 /**
- * @brief Get application-level link state by ID pair
+ * @brief Get application-level link state by pool index (O(1) lookup)
+ *
+ * Preferred over PICC_LinkGetStateByIds() — avoids the O(n) linear scan
+ * and correctly handles shared link entries where multiple apps with
+ * different localIds share the same pool slot.
+ *
+ * @param[in] linkSharedIdx  Link pool index (from PICC_MailboxGetLinkSharedIdx)
+ * @return Link state, or DISCONNECTED if index is invalid/uninitialized
+ */
+PICC_LinkState_e PICC_LinkGetStateByIdx(uint16 linkSharedIdx);
+
+/**
+ * @brief Get application-level link state by ID pair (legacy, O(n) scan)
+ *
+ * @deprecated Use PICC_LinkGetStateByIdx() instead for O(1) lookup.
+ * Kept for backward compatibility with any code that does not have
+ * linkSharedIdx available.
  */
 PICC_LinkState_e PICC_LinkGetStateByIds(uint8 localId, uint8 remoteId);
 

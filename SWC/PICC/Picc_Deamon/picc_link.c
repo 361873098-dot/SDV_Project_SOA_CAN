@@ -3,9 +3,13 @@
  * @brief M-Core Inter-Core Communication Link Management Layer - Implementation
  *
  * Implements shared link pool for per-app connection management.
- * Links are deduplicated by (remoteId, channelId) — multiple Client apps
- * on the same (remoteId, channelId) share one link context.
- * Server apps do NOT allocate a link pool entry.
+ * Links are deduplicated by (remoteId, channelId, role) — multiple apps
+ * with the same (remoteId, channelId, role) share one link context.
+ * Both Server and Client apps allocate a link entry:
+ *   - Server: initial state = DISCONNECTED, passively waits for Client requests.
+ *   - Client: initial state = CONNECTING, actively sends link-connect requests.
+ * Server needs link entry for: state tracking, disconnect/reconnect handling,
+ * and guarding PICC_SendEvent()/PICC_MethodResponse() with link state check.
  *
  * Note: Heartbeat (Ping/Pong) is in picc_heartbeat.c
  *
@@ -41,7 +45,7 @@ extern "C" {
  *                                         Private Variables
  *==================================================================================================*/
 
-/** Shared link pool — deduplicated by (remoteId, channelId) */
+/** Shared link pool — deduplicated by (remoteId, channelId, role) */
 static PICC_LinkShared_t g_linkSharedPool[PICC_LINK_SHARED_POOL_SIZE];
 
 /*==================================================================================================
@@ -60,7 +64,7 @@ static PICC_LinkShared_t* PICC_GetLinkSharedByHeader(uint8 providerId, uint8 con
  */
 static PICC_LinkShared_t* PICC_GetLinkSharedByIds(uint8 localId, uint8 remoteId)
 {
-    uint8 i;
+    uint16 i;
     for (i = 0U; i < PICC_LINK_SHARED_POOL_SIZE; i++) {
         if ((g_linkSharedPool[i].isInitialized != 0U) &&
             (g_linkSharedPool[i].config.localId == localId) &&
@@ -76,7 +80,7 @@ static PICC_LinkShared_t* PICC_GetLinkSharedByIds(uint8 localId, uint8 remoteId)
  */
 static PICC_LinkShared_t* PICC_GetLinkSharedByHeader(uint8 providerId, uint8 consumerId, uint8 channelId)
 {
-    uint8 i;
+    uint16 i;
     PICC_LinkShared_t *ctx;
 
     for (i = 0U; i < PICC_LINK_SHARED_POOL_SIZE; i++) {
@@ -167,11 +171,12 @@ static void PICC_LinkSetState(PICC_LinkShared_t *ctx, PICC_LinkState_e newState)
  *   2. Periodically sends link-connect requests to A-Core Server
  *   3. Implements exponential backoff on send failure
  *
- * Server entries are skipped — Server passively waits for Client connections.
+ * Server entries exist in the pool (for state tracking) but are skipped
+ * during processing — Server passively waits for Client connections.
  */
 void PICC_LinkProcess(void)
 {
-    uint8 i;
+    uint16 i;
     PICC_LinkShared_t *ctx;
 
     for (i = 0U; i < PICC_LINK_SHARED_POOL_SIZE; i++) {
@@ -245,7 +250,7 @@ void PICC_LinkProcess(void)
 
 void PICC_LinkLayerInit(void)
 {
-    uint8 i;
+    uint16 i;
 
     for (i = 0U; i < PICC_LINK_SHARED_POOL_SIZE; i++) {
         g_linkSharedPool[i].isInitialized = 0U;
@@ -256,28 +261,31 @@ void PICC_LinkLayerInit(void)
     }
 }
 
-sint8 PICC_LinkRegisterShared(uint8 localId, uint8 remoteId,
+sint16 PICC_LinkRegisterShared(uint8 localId, uint8 remoteId,
                                uint8 channelId, uint8 role,
                                uint16 linkReqPeriodMs)
 {
-    uint8 i;
+    uint16 i;
+    PICC_LinkState_e initialState;
 
-    /* Server role: no Link pool entry needed */
+    /* Determine initial state based on role:
+     *   Server: DISCONNECTED — passively waits for Client connect request.
+     *   Client: CONNECTING   — actively sends link-connect requests. */
     if (role == (uint8)PICC_ROLE_SERVER) {
-        /* linkSharedIdx already 0xFF from PICC_MailboxRegisterApp */
-        return PICC_E_OK;
+        initialState = PICC_LINK_STATE_DISCONNECTED;
+    } else {
+        initialState = PICC_LINK_STATE_CONNECTING;
     }
 
-    /* Client role: find existing shared link by (remoteId, channelId) */
+    /* Find existing shared link by (remoteId, channelId, role) */
     for (i = 0U; i < PICC_LINK_SHARED_POOL_SIZE; i++) {
         if ((g_linkSharedPool[i].isInitialized != 0U) &&
             (g_linkSharedPool[i].config.remoteId == remoteId) &&
-            (g_linkSharedPool[i].config.channelId == channelId)) {
+            (g_linkSharedPool[i].config.channelId == channelId) &&
+            (g_linkSharedPool[i].config.role == (PICC_Role_e)role)) {
             /* Found existing link — share it */
             g_linkSharedPool[i].refCount++;
-            /* Update localId in appRegistry */
-            /* Note: linkSharedIdx is stored in mailbox, we need a way to set it */
-            return (sint8)i;
+            return (sint16)i;
         }
     }
 
@@ -293,9 +301,9 @@ sint8 PICC_LinkRegisterShared(uint8 localId, uint8 remoteId,
             g_linkSharedPool[i].periodCounter = 0U;
             g_linkSharedPool[i].backoffCounter = 0U;
             g_linkSharedPool[i].refCount = 1U;
-            g_linkSharedPool[i].state = PICC_LINK_STATE_CONNECTING;
+            g_linkSharedPool[i].state = initialState;
             g_linkSharedPool[i].isInitialized = 1U;
-            return (sint8)i;
+            return (sint16)i;
         }
     }
 
@@ -305,7 +313,7 @@ sint8 PICC_LinkRegisterShared(uint8 localId, uint8 remoteId,
 
 void PICC_LinkDeinit(void)
 {
-    uint8 i;
+    uint16 i;
 
     for (i = 0U; i < PICC_LINK_SHARED_POOL_SIZE; i++) {
         g_linkSharedPool[i].isInitialized = 0U;
@@ -485,6 +493,17 @@ PICC_LinkState_e PICC_LinkGetState(uint8 channelId)
     return PICC_LINK_STATE_DISCONNECTED;
 }
 
+PICC_LinkState_e PICC_LinkGetStateByIdx(uint16 linkSharedIdx)
+{
+    if (linkSharedIdx >= PICC_LINK_SHARED_POOL_SIZE) {
+        return PICC_LINK_STATE_DISCONNECTED;
+    }
+    if (g_linkSharedPool[linkSharedIdx].isInitialized == 0U) {
+        return PICC_LINK_STATE_DISCONNECTED;
+    }
+    return g_linkSharedPool[linkSharedIdx].state;
+}
+
 PICC_LinkState_e PICC_LinkGetStateByIds(uint8 localId, uint8 remoteId)
 {
     PICC_LinkShared_t *ctx = PICC_GetLinkSharedByIds(localId, remoteId);
@@ -496,7 +515,7 @@ PICC_LinkState_e PICC_LinkGetStateByIds(uint8 localId, uint8 remoteId)
 
 void PICC_LinkTriggerReconnect(uint8 instanceId, uint8 channelId)
 {
-    uint8 i;
+    uint16 i;
     PICC_LinkShared_t *ctx;
 
     (void)instanceId;
