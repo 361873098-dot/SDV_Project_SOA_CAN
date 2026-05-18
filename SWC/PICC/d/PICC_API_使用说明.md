@@ -1,48 +1,29 @@
-# PICC API 使用说明
+# PICC API 使用说明 (v3.0 — 基于 localId 直索引架构)
 
-
-
-```c
-// 只需传递 appIndex，驱动自动从 PICC_Init() 配置中获取 ID 和 channelId
-PICC_SendEvent(PICC_APP_TIMESYNC, 0x02U, data, len, PICC_EVENT_WITHOUT_ACK);
-PICC_MethodRequest(PICC_APP_OTA, 0x02U, data, 2U, PICC_METHOD_WITH_RESPONSE);
-PICC_MethodResponse(PICC_APP_PWR, 2U, sessionId, 0x00, rspData, 1);
-```
-
-**优势**：
-- 参数数量从 7-8 个减少到 5-6 个
-- 不需要应用层维护 ID 常量，只需知道自己的 `PICC_APP_xxx` 枚举
-- 消除了传错 channelId 或 instanceId 的可能性
-- `PICC_Init()` 配置保持不变，完全向后兼容
+> **本文档基于当前代码自动生成，对应 PICC v3.0 架构（localId 直索引、共享 Link 池、全局 Slot 池）。**
 
 ---
 
-## 0. 核心通信方向与角色向导 (Directionality & Role Summary)
-
-在深入具体 API 之前，**必须先理清 M核与A核 之间两种通信协议的数据流向**。明确了方向，您就知道什么时候该调用什么接口。
+## 0. 核心通信方向与角色向导
 
 ### 1) EVENT 协议 (单向通知 / Fire-and-Forget)
-**特性**：发即忘（类似 UDP 广播），发送方无需对方回复处理结果（无需 Response）。
-*   【**发送方向**：M核 ➡ A核】 (`M -> A`)
-    *   **动作**：M核主动调用 `PICC_SendEvent()`。
-*   【**接收方向**：A核 ➡ M核】 (`A -> M`)
-    *   **动作**：M核通过初始化时注册的 `.eventHandler` 捕获即时硬中断通知；**或者**在周期任务中主动轮询 `PICC_GetEventData()` 读取。
+*   **M核 → A核**：调用 `PICC_SendEvent()`。
+*   **A核 → M核**：通过 `.eventHandler` 回调捕获；或周期轮询 `PICC_GetEventData()`。
 
 ### 2) METHOD 协议 (双向请求 / Request-Response)
-**特性**：一问一答（类似 RPC），Client 提问发起 Request，Server 作答返回 Response。
 *   **情形 A：M核是 Client（M核提问，A核作答）**
-    *   【**发起请求**：M核 ➡ A核】 (`M -> A`)：M核主动调用 `PICC_MethodRequest()` 发送指令。
-    *   【**提取应答**：A核 ➡ M核】 (`A -> M`)：M核在周期任务中轮询 `PICC_GetResponseData()` 收割 A核的处理结果。
+    *   M核 → A核：`PICC_MethodRequest()` 发送请求。
+    *   A核 → M核：`PICC_GetResponseData()` 轮询获取响应。
 *   **情形 B：M核是 Server（A核提问，M核作答）**
-    *   【**提取请求**：A核 ➡ M核】 (`A -> M`)：M核通过初始化时注册的 `.methodHandler` 捕获 A核的瞬间请求；**或者**在周期任务中轮询 `PICC_GetMethodData()` 拿到 A核发来的指令数据。
-    *   【**反馈应答**：M核 ➡ A核】 (`M -> A`)：M核在处理完业务后，必须主动调用 `PICC_MethodResponse()` 给 A核擦屁股回包以结束会话。
+    *   A核 → M核：`.methodHandler` 回调捕获；或 `PICC_GetMethodData()` 轮询获取请求。
+    *   M核 → A核：`PICC_MethodResponse()` 发送响应（回调模式下驱动自动发送）。
 
 ---
 
 ## 1. 概述
 
-`picc_api.h` 是 M 核应用层与 PICC 驱动层交互的**唯一公共接口头文件**。  
-应用层只需 `#include "picc_api.h"`，通过 8 个公共 API 完成全部核间通信操作。
+`picc_api.h` 是 M 核应用层与 PICC 驱动层交互的**唯一公共接口头文件**。
+应用层只需 `#include "picc_api.h"`，通过以下 **9 个**公共 API 完成全部核间通信操作。
 
 ---
 
@@ -50,16 +31,15 @@ PICC_MethodResponse(PICC_APP_PWR, 2U, sessionId, 0x00, rspData, 1);
 
 | # | 函数 | 方向 | 用途 |
 |---|------|------|------|
-| 1 | `PICC_Init()` | 初始化 | 注册一个应用模块并配置回调 |
-| 2 | `PICC_SendEvent()` | M→A | 发送 Event 通知（简化版：自动使用 Init 时的配置） |
-| 3 | `PICC_MethodRequest()` | M→A | 发送 Method 请求（简化版：自动使用 Init 时的配置） |
-| 4 | `PICC_MethodResponse()` | M→A | 发送 Method 响应（简化版：自动使用 Init 时的配置） |
-| 5 | `PICC_GetMethodData()` | A→M | 获取 A 核发来的 Method 请求数据及回调结果 |
-| 6 | `PICC_GetResponseData()` | A→M | 获取 A 核返回的 Method 响应数据及回调结果 |
-| 7 | `PICC_GetEventData()` | A→M | 获取 A 核发来的 Event 通知数据及回调结果 |
-| 8 | `PICC_GetLinkState()` | 查询 | 查询指定通道的链路连接状态 |
-
-**重要改进**：从 v2.0 开始，所有发送 API（SendEvent/MethodRequest/MethodResponse）都已简化，不再需要手动传递 `providerId`、`consumerId`、`instanceId`、`channelId` 等参数。驱动会自动从 `PICC_Init()` 时注册的配置中获取这些信息。
+| 1 | `PICC_Init()` | 初始化 | 注册一个应用（localId 作为直索引） |
+| 2 | `PICC_SendEvent()` | M→A | 发送 Event 通知 |
+| 3 | `PICC_MethodRequest()` | M→A | 发送 Method 请求（返回 sessionId） |
+| 4 | `PICC_MethodResponse()` | M→A | 发送 Method 响应 |
+| 5 | `PICC_GetMethodData()` | A→M | 获取 A 核 Method 请求数据及回调结果 |
+| 6 | `PICC_GetResponseData()` | A→M | 获取 A 核 Method 响应数据及回调结果 |
+| 7 | `PICC_GetEventData()` | A→M | 获取 A 核 Event 通知数据及回调结果 |
+| 8 | `PICC_GetLinkState()` | 查询 | 查询物理通道健康状态（基于心跳） |
+| 9 | `PICC_GetAppLinkState()` | 查询 | 查询应用级链路连接状态（per-app） |
 
 ---
 
@@ -67,65 +47,65 @@ PICC_MethodResponse(PICC_APP_PWR, 2U, sessionId, 0x00, rspData, 1);
 
 ### 3.1 前置条件
 
-在调用 `PICC_Init()` 之前，必须先调用 `PICC_PreOS_Init()`。该函数在 `main()` 函数中、FreeRTOS 调度器启动之前调用，用于初始化 IPCF 驱动和 PICC 基础设施。
+在调用 `PICC_Init()` 之前，必须先调用 `PICC_PreOS_Init()`。该函数在 `main()` 中、FreeRTOS 调度器启动之前调用。
 
 ```c
 int main(void)
 {
     /* ... 其他初始化 ... */
-
-    PICC_PreOS_Init();  /* 必须在 PICC_Init() 之前调用 */
-
+    PICC_PreOS_Init();      /* 必须在任何 PICC_Init() 之前调用 */
     vTaskStartScheduler();  /* 启动 FreeRTOS 调度器 */
-    /* ... */
 }
 ```
+
+`PICC_PreOS_Init()` 内部执行顺序：
+1. 创建 RX 消息队列
+2. 初始化 IPCF 驱动 (`ipc_shm_init`)
+3. 调用 `PICC_InfraInit()`（含 TraceInit → ServiceLayerInit → GlobalInit → MailboxReady → LinkLayerInit）
+4. 注册 Stack 消息回调
+5. 初始化 IPCF Channel 1 和 Channel 2（含 Stack + Heartbeat）
 
 ### 3.2 PICC_AppConfig_t 结构体
 
 ```c
 typedef struct {
-    uint8                    localId;           /* 本地 ID (Server 为 ProviderID, Client 为 ConsumerID) */
-    uint8                    remoteId;          /* 对端 ID (对端的 ProviderID 或 ConsumerID) */
-    PICC_Role_e              role;              /* PICC_ROLE_SERVER 或 PICC_ROLE_CLIENT */
-    uint8                    channelId;         /* IPCF 通道号 (1 或 2) */
-    PICC_MethodCallback_t    methodHandler;     /* Method 请求回调（可为 NULL） */
-    PICC_EventCallback_t     eventHandler;      /* Event 通知回调（可为 NULL） */
+    uint8                    localId;                  /* 本地 ID (1~254)，用作 g_appRegistry 直索引 */
+    uint8                    remoteId;                 /* 对端 ID (1~254) */
+    PICC_Role_e              role;                     /* PICC_ROLE_SERVER 或 PICC_ROLE_CLIENT */
+    uint8                    channelId;                /* IPCF 通道号 (1 或 2) */
+    uint16                   Client_linkReq_PeriodMs;  /* CLIENT 连接请求周期(ms)，0=默认10ms，SERVER忽略 */
+    PICC_MethodCallback_t    methodHandler;             /* Method 请求回调（NULL=轮询模式） */
+    PICC_EventCallback_t     eventHandler;              /* Event 通知回调（NULL=轮询模式） */
 } PICC_AppConfig_t;
 ```
 
-### 3.3 应用索引枚举（PICC_AppIndex_e）
+**v3.0 架构关键变化：**
+- **不再使用 `PICC_AppIndex_e` 枚举**。`localId` 直接作为内部数组索引（O(1) 查找）。
+- **不再需要手动指定 Slot 数量**。Slot 由 `role` 字段自动推导：
+  - SERVER：methodSlots=2, responseSlots=0, eventSlots=2
+  - CLIENT：methodSlots=0, responseSlots=2, eventSlots=2
+- **新增 `Client_linkReq_PeriodMs`**：可自定义 CLIENT 发连接请求的周期。
 
-每个应用模块在初始化时需要指定一个唯一的应用索引：
+### 3.3 ID 分配表（picc_id_map.h）
 
-```c
-typedef enum {
-    PICC_APP_PWR      = 0U,   /* 电源管理    (ProviderID: 0x01) */
-    PICC_APP_OTA      = 1U,   /* OTA         (ProviderID: 0x11) */
-    PICC_APP_HEALTH   = 2U,   /* 健康管理    (ProviderID: 0x21) */
-    PICC_APP_COMM     = 3U,   /* 通信管理    (ProviderID: 0x31) */
-    PICC_APP_STORAGE  = 4U,   /* 存储模块    (ProviderID: 0x41) */
-    PICC_APP_DIAG     = 5U,   /* 诊断模块    (ProviderID: 0x51) */
-    PICC_APP_TIMESYNC = 6U,   /* 时间同步    (ProviderID: 0x61) */
-    PICC_APP_SOA      = 7U,   /* SOA 模块    (ProviderID: 0x71) */
-    PICC_APP_RSV0     = 8U,   /* 预留 0 */
-    PICC_APP_RSV1     = 9U,   /* 预留 1 */
-    PICC_APP_MAX      = 10U   /* 最大数量（数组大小） */
-} PICC_AppIndex_e;
-```
+| 模块 | LOCAL (M核) | REMOTE (A核) | 角色 |
+|------|:-----------:|:------------:|:----:|
+| 电源管理 | 1 | 6 | Server |
+| 设备管理 | 2 | 7 | Server |
+| 健康管理-心跳 | 21 | 26 | Server |
+| 诊断管理 | 52 | 60 | Server |
+| SOA Adapter | 71 | 76 | Server |
+| 健康管理-上报 | 81 | 91 | Server |
 
-### 3.2 两个回调字段说明
+应用模块通过 `#include "picc_id_map.h"` 使用 `PICC_ID_xxx_LOCAL` / `PICC_ID_xxx_REMOTE` 宏。
 
-两个回调字段均为**可选**。传 `NULL` 表示使用**纯轮询模式**，传函数指针表示使用**即时回调模式**。  
-**两种模式可以无缝结合**：邮箱始终存储 A 核原始数据，如果注册了回调，回调产生的结果也会自动存入邮箱。  
-**应用层统一通过 `PICC_Get*Data()` 获取全部数据**（既包含 A 核请求/事件原始数据，也包含回调执行后输出的结果 `cbResult`）。
+### 3.4 两个回调字段说明
 
-#### methodHandler（Method 请求回调）
+两个回调字段均为**可选**。传 `NULL` = 纯轮询模式，传函数指针 = 即时回调 + 轮询混合模式。
 
-| 传值 | 行为 |
-|------|------|
-| `NULL` | 纯轮询，`PICC_GetMethodData()` 读取 A 核请求数据。 |
-| 函数指针 | 请求到达时立刻调用。回调不仅由于构建响应，还可通过 `cbResult` 输出即时结果，该结果可随后通过 `PICC_GetMethodData()` 轮询读取。 |
+> ⚠️ **ISR 上下文警告**：回调直接运行在 IPCF 硬件 RX 中断中！执行时间严禁超过 **50μs**，严禁调用任何阻塞 OS API！
+
+#### methodHandler
 
 ```c
 typedef uint8 (*PICC_MethodCallback_t)(uint8 consumerId, uint8 methodId,
@@ -134,12 +114,10 @@ typedef uint8 (*PICC_MethodCallback_t)(uint8 consumerId, uint8 methodId,
                                        uint8 *cbResult, uint16 *cbResultLen);
 ```
 
-#### eventHandler（Event 通知回调）
+- `NULL`：纯轮询，通过 `PICC_GetMethodData()` 读取请求，**必须手动调用 `PICC_MethodResponse()` 回复**。
+- 函数指针：请求到达时立即调用，驱动**自动发送 RESPONSE**（填写 rspData/rspLen），**禁止再手动调用 `PICC_MethodResponse()`**。
 
-| 传值 | 行为 |
-|------|------|
-| `NULL` | 纯轮询，通过 `PICC_GetEventData()` 读取 A 核 Event 数据。 |
-| 函数指针 | 事件到达时立刻调用。回调内部通常执行轻量、高时效性操作（如采集时间戳）输出到 `cbResult` 中，并存入邮箱供周期应用轮询读取。 |
+#### eventHandler
 
 ```c
 typedef void (*PICC_EventCallback_t)(uint8 providerId, uint8 eventId,
@@ -147,367 +125,379 @@ typedef void (*PICC_EventCallback_t)(uint8 providerId, uint8 eventId,
                                      uint8 *cbResult, uint16 *cbResultLen);
 ```
 
-### 3.3 统一轮询读取 API（新增 cbResult 极简设计）
-
-```c
-/* 最后两个参数用于输出本次接收带来的"回调产生的结果（cbResult）"。如果应用不需要或者没注册该类事件的回调，传 NULL 即可 */
-sint8 PICC_GetMethodData(appIndex, methodId, data, maxLen, &len, cbResult, &cbLen);
-sint8 PICC_GetResponseData(appIndex, methodId, &retCode, data, maxLen, &len, cbResult, &cbLen);
-sint8 PICC_GetEventData(appIndex, eventId, data, maxLen, &len, cbResult, &cbLen);
-PICC_LinkState_e PICC_GetLinkState(channelId);
-```
-
-`PICC_GetLinkState()` 是公开的 polling API，用于按通道查询当前链路状态：
-
-1. `PICC_LINK_STATE_DISCONNECTED`
-2. `PICC_LINK_STATE_CONNECTING`
-3. `PICC_LINK_STATE_CONNECTED`
-
-说明：
-
-1. 发送类 API 内部已经自动检查链路状态，未连接时会直接返回失败。
-2. 因此应用层通常不需要在每次发送前自行检查链路。
-3. 只有当业务确实需要根据链路状态做自己的流程分支时，才需要调用 `PICC_GetLinkState()`。
-
-示例：
-
-```c
-PICC_LinkState_e linkState;
-
-linkState = PICC_GetLinkState(PWR_CHANNEL_ID);
-
-if (linkState == PICC_LINK_STATE_CONNECTED) {
-    /* 链路已建立，可继续执行依赖对端在线的业务逻辑 */
-} else if (linkState == PICC_LINK_STATE_CONNECTING) {
-    /* 链路正在建立，通常保持等待或进入重试/降级状态 */
-} else {
-    /* PICC_LINK_STATE_DISCONNECTED */
-    /* 链路未建立，可跳过本周期发送或记录本地状态 */
-}
-```
-
-上面这个示例适用于“业务流程分支控制”。如果只是单纯发送报文，则通常不需要先调用它，例如：
-
-```c
-sint8 ret;
-uint8 payload[1] = { (uint8)PWR_STATE_STANDBY };
-
-ret = PICC_SendEvent(PICC_APP_PWR, PWR_EVENT_STATE_NOTIFY,
-                     payload, 1U, PICC_EVENT_WITH_ACK);
-
-if (ret == PICC_E_NOT_CONNECTED) {
-    /* 发送接口内部已经完成链路检查，这里按失败处理即可 */
-}
-```
+- `NULL`：纯轮询，通过 `PICC_GetEventData()` 读取。
+- 函数指针：事件到达时立即调用。适合微秒精度操作（如时间戳采集）。
 
 ---
 
-## 4. 使用示例
+## 4. API 详细说明
 
-> **核心概念**：不管应用层底层是否注册了回调函数（执行实时操作），周期主任务始终使用相同的 `PICC_Get*Data()` 进行查询。  
-> 这一极简设计意味着应用不再需要自己声明复杂的全局共享变量，也能够轻松得到回调产生的即时计算结果。
-
-### 4.1 场景一：纯轮询（Pwsm 电源管理模型）
-
-回调全部传 `NULL`，直接在周期任务中获取并处理数据。由于不需要回调返回的结果，获取函数中传 `NULL, NULL`。
+### 4.1 PICC_Init — 注册应用
 
 ```c
+sint8 PICC_Init(const PICC_AppConfig_t *config);
+```
+
+**参数**：`config` — 应用配置指针
+
+**返回值**：
+
+| 返回码 | 含义 |
+|--------|------|
+| `PICC_E_OK` (0) | 注册成功 |
+| `PICC_E_PARAM` (-2) | config=NULL 或 localId/remoteId 超出 [1,254] 范围 |
+| `PICC_E_NOT_INIT` (-1) | PICC 基础设施未初始化（未调用 PICC_PreOS_Init） |
+| `PICC_E_DUPLICATE` (-7) | localId 已被注册 |
+| `PICC_E_NOMEM` (-3) | Slot 池耗尽 |
+| `PICC_E_REMOTE_ID_CONFLICT` (-8) | remoteId 映射冲突 |
+
+**内部流程**（自动完成，应用无需关心）：
+1. 在 Mailbox 注册 app（包含 Slot 池分配）
+2. 在共享 Link 池注册链路（Server 初始 DISCONNECTED，Client 初始 CONNECTING）
+3. 注册 Method handler（如非 NULL）
+4. 注册 Event handler（如非 NULL）
+
+### 4.2 PICC_SendEvent — 发送 Event (M→A)
+
+```c
+sint8 PICC_SendEvent(uint8 localId, uint8 eventId,
+                     const uint8 *data, uint16 len, PICC_EventType_e withAck);
+```
+
+| 参数 | 说明 |
+|------|------|
+| `localId` | 应用本地 ID（如 `PICC_ID_PWR_LOCAL`） |
+| `eventId` | Event ID (1~254) |
+| `data` | 负载数据指针 |
+| `len` | 负载长度 |
+| `withAck` | `PICC_EVENT_WITH_ACK` 或 `PICC_EVENT_WITHOUT_ACK` |
+
+> 注：M核因实时性限制，建议使用 `PICC_EVENT_WITHOUT_ACK`。即使配置为 WITH_ACK，M核也不会处理返回的 ACK。
+
+**返回值**：`PICC_E_OK` 成功 / `PICC_E_NOT_CONNECTED` 链路未连接 / 其他错误码
+
+### 4.3 PICC_MethodRequest — 发送 Method 请求 (M→A, Client)
+
+```c
+uint8 PICC_MethodRequest(uint8 localId, uint8 methodId,
+                         const uint8 *data, uint16 len,
+                         PICC_MethodType_e type);
+```
+
+**返回值**：成功返回非零 SessionID (1~255)，失败返回 0。
+
+SessionID 用于后续 `PICC_GetResponseData()` 匹配异步响应。
+
+| MethodType | 说明 |
+|------------|------|
+| `PICC_METHOD_WITH_RESPONSE` | 需要 A 核返回业务 Response |
+| `PICC_METHOD_NO_RETURN_WITH_ACK` | 不需业务 Response，但中间件返回 ACK |
+| `PICC_METHOD_NO_RETURN_WITHOUT_ACK` | 即发即忘 |
+
+### 4.4 PICC_MethodResponse — 发送 Method 响应 (M→A, Server)
+
+```c
+sint8 PICC_MethodResponse(uint8 localId, uint8 methodId,
+                          uint8 sessionId, uint8 returnCode,
+                          const uint8 *data, uint16 len);
+```
+
+> ⚠️ **仅在纯轮询模式（`methodHandler=NULL`）下使用！** 注册了回调的场景下，驱动自动发送 RESPONSE，禁止手动调用。
+
+### 4.5 PICC_GetMethodData — 获取 Method 请求 (A→M)
+
+```c
+sint8 PICC_GetMethodData(uint8 localId, uint8 methodId,
+                         uint8 *data, uint16 maxLen, uint16 *actualLen,
+                         uint8 *outSessionId,
+                         uint8 *cbResult, uint16 *cbResultLen);
+```
+
+| 出参 | 说明 |
+|------|------|
+| `data` | A核请求原始负载 |
+| `actualLen` | 实际负载长度 |
+| `outSessionId` | A核请求的 SessionID（回复 Response 时必须原样回传） |
+| `cbResult` | 回调产生的结果（无回调时 cbResultLen=0），可传 NULL |
+| `cbResultLen` | 回调结果长度，可传 NULL |
+
+**返回值**：`PICC_E_OK` = 有新数据 / `PICC_E_NO_DATA` = 无新数据
+
+### 4.6 PICC_GetResponseData — 获取 Method 响应 (A→M)
+
+```c
+sint8 PICC_GetResponseData(uint8 localId, uint8 methodId,
+                           uint8 sessionId, uint8 *returnCode,
+                           uint8 *data, uint16 maxLen, uint16 *actualLen,
+                           uint8 *cbResult, uint16 *cbResultLen);
+```
+
+`sessionId` 必须与 `PICC_MethodRequest()` 返回的值一致，用于匹配异步响应。
+
+### 4.7 PICC_GetEventData — 获取 Event 通知 (A→M)
+
+```c
+sint8 PICC_GetEventData(uint8 localId, uint8 eventId,
+                        uint8 *data, uint16 maxLen, uint16 *actualLen,
+                        uint8 *cbResult, uint16 *cbResultLen);
+```
+
+### 4.8 PICC_GetLinkState — 物理通道健康状态
+
+```c
+PICC_LinkState_e PICC_GetLinkState(uint8 channelId);
+```
+
+基于心跳（Ping/Pong）判断物理通道是否可用：
+- 心跳周期：2000ms
+- 失效条件：连续 3 次未收到 Pong
+
+返回值：`PICC_LINK_STATE_CONNECTED` 或 `PICC_LINK_STATE_DISCONNECTED`。
+
+### 4.9 PICC_GetAppLinkState — 应用级链路状态
+
+```c
+PICC_LinkState_e PICC_GetAppLinkState(uint8 localId);
+```
+
+返回该应用的连接握手状态：
+
+| 状态 | 说明 |
+|------|------|
+| `PICC_LINK_STATE_DISCONNECTED` | 未连接 / 已断开 |
+| `PICC_LINK_STATE_CONNECTING` | 正在连接（Client 周期发送连接请求） |
+| `PICC_LINK_STATE_CONNECTED` | 已连接（握手完成） |
+
+> 发送类 API 内部已自动检查应用级链路状态，未连接时返回 `PICC_E_NOT_CONNECTED`。应用层通常无需在发送前手动检查。
+
+---
+
+## 5. 错误码一览
+
+| 宏 | 值 | 含义 |
+|----|:--:|------|
+| `PICC_E_OK` | 0 | 成功 |
+| `PICC_E_NOT_INIT` | -1 | 基础设施未初始化 |
+| `PICC_E_PARAM` | -2 | 参数无效 |
+| `PICC_E_NOMEM` | -3 | 内存/Slot 不足 |
+| `PICC_E_SEND` | -4 | 发送失败 |
+| `PICC_E_NOT_CONNECTED` | -5 | 链路未连接 |
+| `PICC_E_NO_DATA` | -6 | 无新数据 |
+| `PICC_E_DUPLICATE` | -7 | localId 重复注册 |
+| `PICC_E_REMOTE_ID_CONFLICT` | -8 | remoteId 映射冲突 |
+
+---
+
+## 6. 使用示例
+
+### 6.1 场景一：纯轮询（电源管理模型，M核=Server）
+
+```c
+#include "picc_api.h"
+
 void Pwsm_Init(void)
 {
     static const PICC_AppConfig_t cfg = {
-        .localId           = PWR_PROVIDER_ID,     /* 0x01 */
-        .remoteId          = PWR_CONSUMER_ID,     /* 0x06 */
-        .role              = PICC_ROLE_SERVER,
-        .channelId         = PWR_CHANNEL_ID,      /* 2 */
-        .methodHandler     = NULL,  /* 纯轮询模式，无需回调 */
-        .eventHandler      = NULL   /* 纯轮询模式，无需回调 */
+        .localId                = PICC_ID_PWR_LOCAL,     /* 1 */
+        .remoteId               = PICC_ID_PWR_REMOTE,    /* 6 */
+        .role                   = PICC_ROLE_SERVER,
+        .channelId              = 2U,
+        .Client_linkReq_PeriodMs = 0U,       /* Server 忽略此字段 */
+        .methodHandler          = NULL,       /* 纯轮询模式 */
+        .eventHandler           = NULL
     };
-
-    (void)PICC_Init(PICC_APP_PWR, &cfg);
+    (void)PICC_Init(&cfg);
 }
 
-void Pwsm_CommEvent(void)  /* 10ms 周期任务 */
+void Pwsm_Main_10ms(void)
 {
     uint8 buf[8];
     uint16 len;
+    uint8 sessionId;
 
-    /* 【发送通知：M ➡ A】（EVENT 发送单向通知） */
-    uint8 payload[1] = { (uint8)PWR_STATE_STANDBY };
-    (void)PICC_SendEvent(PICC_APP_PWR, PWR_EVENT_STATE_NOTIFY,
-                         payload, 1U, PICC_EVENT_WITH_ACK);
+    /* 发送 Event (M→A) */
+    uint8 payload[1] = { 0x04 };
+    (void)PICC_SendEvent(PICC_ID_PWR_LOCAL, 1U,
+                         payload, 1U, PICC_EVENT_WITHOUT_ACK);
 
-    /* 【提取请求：A ➡ M】（METHOD 场景B：M核是 Server 获取请求） */
-    /* 没注册回调，不需要 cbResult，后两个参数传 NULL, NULL */
-    if (PICC_GetMethodData(PICC_APP_PWR, PWR_METHOD_STATE_ACK,
+    /* 轮询获取 Method 请求 (A→M) */
+    if (PICC_GetMethodData(PICC_ID_PWR_LOCAL, 2U,
                            buf, sizeof(buf), &len,
+                           &sessionId,
                            NULL, NULL) == PICC_E_OK) {
-        if (len >= 2U && buf[0] == PWR_CORE_A) {
-            /* 处理收到的 Method Request 的业务逻辑... */
+        /* 处理业务... */
 
-            /* 【反馈应答：M ➡ A】（METHOD 场景B：M核必须回复 Response 形成 RPC 闭环！） */
-            /* ⚠️ 防呆提示：因为没注册回调函数，所以必须手动调用 MethodResponse 发送回包结束本次会话！ */
-            uint8 rspPayload[1] = { 0x00 }; /* 0x00 表示处理成功 */
-            (void)PICC_MethodResponse(PICC_APP_PWR, PWR_METHOD_STATE_ACK,
-                                      0U /* sessionId */, 0x00, rspPayload, 1);
-        }
+        /* 纯轮询模式必须手动回复 Response */
+        uint8 rsp[2] = { 0x03, 0x04 };
+        (void)PICC_MethodResponse(PICC_ID_PWR_LOCAL, 2U,
+                                  sessionId, 0x00, rsp, 2U);
     }
 }
 ```
 
-### 4.2 场景二：链路状态 polling（业务按需查询）
-
-如果某个业务模块确实需要根据链路状态做本地分支控制，可以直接查询 `PICC_GetLinkState()`。
+### 6.2 场景二：回调模式（时钟同步时间戳，M核=Client）
 
 ```c
-void Comm_Main(void)
+static void TimeSync_EventCb(uint8 providerId, uint8 eventId,
+                              const uint8 *data, uint16 len,
+                              uint8 *cbResult, uint16 *cbResultLen)
 {
-    if (PICC_GetLinkState(COMM_CHANNEL_ID) != PICC_LINK_STATE_CONNECTED) {
-        /* 链路未建立时，不发业务报文或进入降级处理 */
-        return;
-    }
-
-    /* 只有链路已连接时才执行业务收发 */
-}
-```
-
-这个示例体现的原则是：
-
-1. 链路状态通过 polling API 显式查询。
-2. 发送 API 内部已经做链路检查，因此这里只在业务需要分支控制时才调用。
-3. 这样可以保持 `PICC_AppConfig_t` 简洁，不为未使用的回调保留配置位。
-
-### 4.3 场景三：Event 回调 + 统一读取（时钟同步时间戳模型）
-
-回调中立刻采集硬件定时器戳写入 `cbResult`，随后周期任务无缝通过 `PICC_GetEventData()` 一并拿到 A 核数据和刚才记录的硬件回调结果（本地时间戳）。
-
-```c
-static void TimeSync_EventHandler(uint8 providerId, uint8 eventId,
-                                   const uint8 *data, uint16 len,
-                                   uint8 *cbResult, uint16 *cbResultLen)
-{
-    if (eventId == TIMESYNC_EVENT_SYNC_REQUEST) {
-        /* [即时操作] 在数据到达微秒级瞬间，采集本地机器时间戳 */
-        uint32 ts = STM_GetCounter();
-        cbResult[0] = (uint8)(ts >> 24U);
-        cbResult[1] = (uint8)(ts >> 16U);
-        cbResult[2] = (uint8)(ts >>  8U);
-        cbResult[3] = (uint8)(ts);
-        *cbResultLen = 4U;
-    }
+    /* ISR 上下文 — 立即采集硬件时间戳 */
+    uint32 ts = STM_GetCounter();
+    cbResult[0] = (uint8)(ts >> 24);
+    cbResult[1] = (uint8)(ts >> 16);
+    cbResult[2] = (uint8)(ts >>  8);
+    cbResult[3] = (uint8)(ts);
+    *cbResultLen = 4U;
 }
 
 void TimeSync_Init(void)
 {
     static const PICC_AppConfig_t cfg = {
-        .localId           = TIMESYNC_PROVIDER_ID,   /* 0x61 */
-        .remoteId          = TIMESYNC_CONSUMER_ID,   /* 0x66 */
-        .role              = PICC_ROLE_CLIENT,
-        .channelId         = TIMESYNC_CHANNEL_ID,    /* 1 */
-        .methodHandler     = NULL,
-        .eventHandler      = TimeSync_EventHandler   /* 注册即时回调 */
+        .localId                = 61U,
+        .remoteId               = 66U,
+        .role                   = PICC_ROLE_CLIENT,
+        .channelId              = 1U,
+        .Client_linkReq_PeriodMs = 10U,      /* 10ms 周期发连接请求 */
+        .methodHandler          = NULL,
+        .eventHandler           = TimeSync_EventCb
     };
-    (void)PICC_Init(PICC_APP_TIMESYNC, &cfg);
+    (void)PICC_Init(&cfg);
 }
 
-void TimeSync_Main(void)  /* 10ms 周期任务 */
+void TimeSync_Main_10ms(void)
 {
-    uint8 remoteData[8]; uint16 remoteLen;
-    uint8 cbResult[8];   uint16 cbLen;
+    uint8 rxData[8]; uint16 rxLen;
+    uint8 cbRes[8];  uint16 cbLen;
 
-    /* 【提取通知：A ➡ M】（EVENT 接收通知） */
-    /* 只需这 1 个 API（无需查全局变量），就能同时提取远端包裹和刚才顺手记录的本地时间戳！ */
-    if (PICC_GetEventData(PICC_APP_TIMESYNC, TIMESYNC_EVENT_SYNC_REQUEST,
-                          remoteData, sizeof(remoteData), &remoteLen,
-                          cbResult, &cbLen) == PICC_E_OK)
-    {
-        uint32 localTs = ((uint32)cbResult[0] << 24U) |
-                         ((uint32)cbResult[1] << 16U) |
-                         ((uint32)cbResult[2] <<  8U) |
-                         ((uint32)cbResult[3]);
-
-        /* 有了 A核数据(remoteData) + 回调记录的即时本地时间戳(localTs)，即可开始对齐计算 */
-        TimeSync_CalculateOffset(localTs, remoteData, remoteLen);
-
-        /* 【主动发送通知：M ➡ A】（EVENT 发送单向通知） */
-        /* 同步计算完成后，如果想立刻反向报喜给 A核，因为是 EVENT，发出去就不管了 */
-        uint8 syncDoneMsg[1] = { 0x01 };
-        (void)PICC_SendEvent(PICC_APP_TIMESYNC, TIMESYNC_EVENT_SYNC_DONE,
-                             syncDoneMsg, 1, PICC_EVENT_WITHOUT_ACK);
+    if (PICC_GetEventData(61U, 0x01,
+                          rxData, sizeof(rxData), &rxLen,
+                          cbRes, &cbLen) == PICC_E_OK) {
+        /* rxData = A核原始数据, cbRes = 回调中采集的时间戳 */
+        uint32 localTs = ((uint32)cbRes[0] << 24) | ((uint32)cbRes[1] << 16) |
+                         ((uint32)cbRes[2] <<  8) | ((uint32)cbRes[3]);
+        /* 执行时钟对齐... */
     }
 }
 ```
 
-### 4.4 场景四：Method 回调 + 统一读取（OTA 写闪存模型）
+### 6.3 场景三：链路状态查询
 
 ```c
-static uint8 OTA_MethodHandler(uint8 consumerId, uint8 methodId,
-                                const uint8 *reqData, uint16 reqLen,
-                                uint8 *rspData, uint16 *rspLen,
-                                uint8 *cbResult, uint16 *cbResultLen)
+void MyApp_Main(void)
 {
-    if (methodId == OTA_METHOD_FLASH_WRITE) {
-        /* [即刻进行擦写操作] */
-        sint8 ret = Flash_Write(reqData, reqLen);
-
-        /* 【反馈应答准备：M ➡ A】（METHOD 场景B：自动闭环） */
-        /* ⚠️ 高级用法防呆提示：由于您在此注册了 Callback 函数！ */
-        /* 驱动底层在拿到下面的 rspData 和 rspLen 赋值后，会【全自动调用 PICC_MethodResponse()】替您擦屁股！ */
-        /* 您在下文的 OTA_Main 手动轮询时，就『绝不能』再去调用一次 MethodResponse 重复发包了。 */
-        rspData[0] = (ret == 0) ? 0x00U : 0x01U;
-        *rspLen = 1U;
-
-        /* 回调结果输出：把本次写入完毕的字节数留给周期应用任务展示用 */
-        cbResult[0] = (uint8)(reqLen >> 8U);
-        cbResult[1] = (uint8)(reqLen);
-        *cbResultLen = 2U;
-        return 0x00;
+    /* 方式 1：查物理通道（心跳级别） */
+    if (PICC_GetLinkState(2U) != PICC_LINK_STATE_CONNECTED) {
+        /* 物理通道不健康，跳过所有业务 */
+        return;
     }
-    return 0x01;
-}
 
-void OTA_Init(void)
-{
-    static const PICC_AppConfig_t cfg = {
-        .localId           = OTA_PROVIDER_ID,     /* 0x11 */
-        .remoteId          = OTA_CONSUMER_ID,     /* 0x16 */
-        .role              = PICC_ROLE_SERVER,
-        .channelId         = OTA_CHANNEL_ID,      /* 2 */
-        .methodHandler     = OTA_MethodHandler,   /* <--- 在这里注册回调！ */
-        .eventHandler      = NULL
-    };
-    (void)PICC_Init(PICC_APP_OTA, &cfg);
-}
-
-void OTA_Main(void)
-{
-    uint8 data[32]; uint16 len;
-    uint8 cbResult[8]; uint16 cbLen;
-
-    /* 【主动请求：M ➡ A】（METHOD 场景A：M核主动扮演 Client) */
-    /* 例如如果 M核 OTA 觉得该下一包了，可以随时发起 MethodRequest 要更新数据 */
-    // uint8 reqCmd[2] = {0x00, 0x01};
-    // (void)PICC_MethodRequest(PICC_APP_OTA, OTA_METHOD_REQUEST_DATA,
-    //                          reqCmd, 2U, PICC_METHOD_WITH_RESPONSE);
-
-    /* 【提取请求（已自动回复妥当）：A ➡ M】（METHOD 场景B：获取通知和回调果实） */
-    /* 周期任务完全省去写全局变量，在这里直接检查刚才瞬间的回调有没有完成烧写的块 */
-    if (PICC_GetMethodData(PICC_APP_OTA, OTA_METHOD_FLASH_WRITE,
-                           data, sizeof(data), &len,
-                           cbResult, &cbLen) == PICC_E_OK) {
-        uint16 writtenBytes = ((uint16)cbResult[0] << 8U) | cbResult[1];
-        /* 记录 writtenBytes，更新进度条等... */
+    /* 方式 2：查应用级链路（握手级别） */
+    if (PICC_GetAppLinkState(PICC_ID_PWR_LOCAL) != PICC_LINK_STATE_CONNECTED) {
+        /* 该应用尚未完成握手 */
+        return;
     }
+
+    /* 链路已连接，执行业务... */
 }
 ```
 
 ---
 
-## 5. 数据流总结
+## 7. 数据流总结
 
 ```
-A核数据到达 → PICC_StoreToMailbox(payload)  ─── 覆盖存入槽位 slot.data
-           → 调用底层回调(产生cbResult)      ─── 覆盖存入槽位 slot.cbResult
+A核数据到达 → PICC_StoreToMailbox(payload)    ── 存入 slot.data
+           → 调用底层回调(产生 cbResult)       ── 存入 slot.cbResult
            │
            ▼
   应用层周期拉取 PICC_Get*Data(data, cbResult)
            │
-           ├─ data     = A核请求/返回/事件原始数据
-           └─ cbResult = 回调产生的结果（如果没有执行回调，则 cbResultLen = 0）
-```
-
-| 运行时特性 | 注册回调状态 | `PICC_Get*Data()` 操作结果 |
-|------|:----:|----------------------|
-| **纯轮询模式** | `NULL` | 读取出 `data` 为A核原始数据，`cbResultLen=0` |
-| **异步混合模式** | `函数指针` | 读取出 `data` 为A核原始数据，同时 `cbResult` 为即时回调产生的产物 |
-
----
-
-## 6. 兼容性总结
-
-`PICC_Init()` 配置接口和 `PICC_Get*Data()` 拉取接口设计为**完全且一致地屏蔽了底层差异**。无论业务对延迟的诉求如何，均可保持主干代码风格统一，极大程度避免在应用层大量维护外部共享标志位，提高高复用性核间通信的使用体验。
-
----
-
-## 7. 常见关键疑问解答 (FAQ)
-
-### Q1：我在 `PICC_Init()` 中注册了 `methodHandler` 或者 `eventHandler` 回调函数，那么在我的周期主函数里，**还能/还需要**调用 `PICC_GetEventData` 或 `PICC_GetMethodData` 进行轮询吗？
-
-**答：绝对可以，并且非常推荐这么做（这就是设计的精髓）！**
-
-底层信箱的机制是**“数据装填”与“回调执行”双管齐下**。
-当硬件中断触发、A核的数据瞬间到达时，底层系统会执行两件事：
-1. 立马把 A 核传来的**“原始特征数据”**（Payload）塞进信箱槽位。
-2. 触发你注册的 `Handler` 回调。你在回调里可以通过指针写入 `cbResult`，随后底层也会把你写好的这段 `cbResult` 追加塞进上述那个同一个信箱槽位！
-
-完成这两步后，中断退出。
-
-**这意味着：**即便你注册了 Callback（用于处理一些对时间极度敏感的硬件计算，例如抓拍一条系统时间戳），这批数据依然被完好地封存在信箱中等待回收。
-随后当你的周期函数（如 10ms task）慢条斯理地执行到时，你**依然可以并且应当**去调用 `PICC_GetEventData` 或 `PICC_GetMethodData`。
-这个时候你不仅能原封不动地拿到 A核 发来的 `data`，还能从出参 `cbResult` 中完美提取出刚才在中断的回调里顺手帮你算好的“附加结果”。这彻底免去了你在应用层到处定义 `extern volatile` 全局变量来做跨任务通信的痛苦。
-
-**👇 核心极简示范（以 Event 为例）：**
-```c
-/* 1. 这是你注册在 PICC_Init 中的回调函数（运行在中断级别） */
-static void My_EventHandler(uint8 providerId, uint8 eventId,
-                            const uint8 *data, uint16 len,
-                            uint8 *cbResult, uint16 *cbResultLen)
-{
-    /* 来报文的瞬间，我只需要做一件对时间极其敏感的事：抓一个当前微秒级时间戳 */
-    uint32 hw_timestamp = STM_GetCounter();
-    
-    /* 写入到 cbResult 随身包里，底层信箱会替你保管它，供后面主任务提取！ */
-    cbResult[0] = (uint8)(hw_timestamp >> 24);
-    cbResult[1] = (uint8)(hw_timestamp >> 16);
-    cbResult[2] = (uint8)(hw_timestamp >> 8);
-    cbResult[3] = (uint8)(hw_timestamp);
-    *cbResultLen = 4U; 
-}
-
-/* 2. 你的 10ms 慢速业务死循环任务（运行在 OS Task 级别） */
-void My_PeriodicTask(void)
-{
-    uint8 rxData[32];   uint16 rxLen;
-    uint8 myCbData[8];  uint16 myCbLen;
-    
-    /* 重点来了！哪怕你前面用了 Callback，你仍然在这里悠哉地调用 GetEventData */
-    if (PICC_GetEventData(PICC_APP_DIAG, 0x01, 
-                          rxData, sizeof(rxData), &rxLen, 
-                          myCbData, &myCbLen /* <- 关注这里 */) == PICC_E_OK) 
-    {
-        /* 一次 API 调用，你拿到了两样东西！ */
-        
-        // 1. A核原汁原味发过来的通讯原始报文 (rxData)
-        Process_A_Core_Message(rxData, rxLen);
-        
-        // 2. 刚才在中断里，你存进 cbResult 的那个微秒级机器时间戳！(myCbData)
-        // 跨任务通信连个全局变量都不用定义，是不是爽爆了？
-        uint32 fast_timestamp = (myCbData[0] << 24) | (myCbData[1] << 16) | (myCbData[2] << 8) | myCbData[3];
-        Sync_System_Time(fast_timestamp);
-    }
-}
+           ├─ data     = A核原始数据
+           └─ cbResult = 回调产生的结果（无回调时 cbResultLen=0）
 ```
 
 ---
 
-### Q2：`PICC_MethodResponse` 到底要在什么场景下使用？是否必须和 `PICC_GetMethodData` 成对出现？
+## 8. 模块架构概览
 
-**答：取决于你初始化时有没有注册回调函数。**
+```
+┌─────────────────────────────────────────────────┐
+│                   应用层 (SWC)                   │
+│  Pwsm / OTA / Health / SOA / Diag / TimeSync    │
+│         仅 #include "picc_api.h"                 │
+└───────────────────┬─────────────────────────────┘
+                    │ PICC_Init / SendEvent / MethodRequest / Get*Data
+                    ▼
+┌─────────────────────────────────────────────────┐
+│              picc_api.c (公共 API 层)             │
+│  参数校验 → 委托内部模块                          │
+└───────┬──────────┬───────────┬──────────────────┘
+        │          │           │
+        ▼          ▼           ▼
+  picc_mailbox   picc_service   picc_link
+  (邮箱/注册)   (Event/Method)  (连接管理)
+        │          │           │
+        └────┬─────┘           │
+             ▼                 │
+        picc_stack ◄───────────┘
+      (消息堆叠/CRC)
+             │
+             ▼
+        picc_protocol          picc_heartbeat
+      (协议编解码)           (心跳 Ping/Pong)
+             │                      │
+             └──────────┬───────────┘
+                        ▼
+                   IPCF Driver
+                  (ipc-shm.h)
+```
 
-**场景 1：`methodHandler = NULL`（纯轮询模式）**
-- **是！必须严格成对使用。**
-- 流程：使用 `PICC_GetMethodData` 获取请求 ➔ 执行业务 ➔ 必须立刻调用 `PICC_MethodResponse` 回复结果，否则对端会超时死锁。
+**各模块职责**：
 
-**场景 2：注册了 `methodHandler` 回调函数（如 OTA 示例）**
-- **否！绝对不能成对使用，千万不要手动调 `PICC_MethodResponse`。**
-- 流程：中断触发回调 ➔ 你在这时填好出参 ➔ **底层立刻全自动替你发送 Response** ➔ 通讯正式结束。如果你在周期任务轮询 `PICC_GetMethodData` 后再去调一遍 `PICC_MethodResponse`，会导致严重重复发包导致系统崩溃。
+| 模块 | 文件 | 职责 |
+|------|------|------|
+| API 层 | picc_api.h/c | 唯一公共接口，参数校验 + 委托 |
+| 邮箱 | picc_mailbox.h/c | App 注册、Slot 池管理、消息路由存储、轮询读取 |
+| 服务 | picc_service.h/c | Event/Method 发送、自动 ACK/Response、回调分发 |
+| 链路 | picc_link.h/c | 共享 Link 池、连接握手、断开/重连处理 |
+| 堆叠 | picc_stack.h/c | 消息堆叠发送（10ms 周期或缓冲区满）、Counter+CRC 封包/解包 |
+| 协议 | picc_protocol.h/c | 8 字节协议头编解码、CRC16、字节序转换 |
+| 心跳 | picc_heartbeat.h/c | 双向 Ping/Pong（2s 周期）、通道健康监测 |
+| 追踪 | picc_trace.h/c | TX/RX 数据记录（TRACE32 调试用） |
+| 入口 | picc_main.h/c | PreOS 初始化、IPCF 回调、RX 任务、消息分发 |
+| ID表 | picc_id_map.h | 集中定义所有应用 LOCAL/REMOTE ID |
 
 ---
 
-### Q3：`methodHandler` 和 `eventHandler` 这两个回调函数的执行时间最大不能超过多少？可以调用系统 API 吗？
+## 9. FAQ
 
-**答：必须极度精简！执行时间严禁超过 50 微秒 (50us)！绝对禁止调用任何带有阻塞性质的 OS API！**
+### Q1：注册了回调后，还能调用 `PICC_Get*Data()` 轮询吗？
 
-由于这两个回调函数是**直接运行在底层 IPCF 硬件 RX 接收中断服务程序（ISR context）**中的，这赋予了你处理纳秒/微秒级急迫任务（例如对齐时钟时间戳）的权利，但也带来了极高的系统责任：
+**可以，且推荐。** 邮箱始终存储 A 核原始数据 + 回调结果。回调用于微秒级即时操作，轮询用于业务逻辑处理。
 
-1. **执行时间极值**：代码必须非常简短，通常只是几条变量赋值、读取一下外设寄存器、或者简单的内存拷贝操作。**整体耗时必须控制在 50us 以内**。千万不能在这里执行耗时的工作（例如：Flash擦写逻辑、死循环等待设备响应、大量的复杂数学运算等！）。如果遇到这些需要耗时的操作，请把 A 核的指令通过 `cbResult`（或者纯轮询模式）带出来，回抛到外部的 **10ms OS 周期的应用层代码里面去慢慢算**。
-2. **严禁调用阻塞 API（极其致命）**：在中断上下文中，**绝对不允许**调用 `vTaskDelay`、申请带 Wait 时间的 Semaphore/Mutex 等一切会引起 OS 上下文挂起的接口。一旦你在里面把 M 核心死锁了或休眠了，整个 FreeRTOS 调度器和其它所有外设的后续中断响应都会瞬间瘫痪，继而直接触发硬件看门狗复位或系统严重假死。
+### Q2：`PICC_MethodResponse` 什么时候用？
+
+- `methodHandler=NULL`：**必须手动调用**，与 `PICC_GetMethodData` 成对使用。
+- `methodHandler≠NULL`：**禁止手动调用**，驱动自动发送 Response。
+
+### Q3：回调执行时间限制？
+
+**严禁超过 50μs！** 回调运行在 IPCF RX ISR 中，禁止调用 `vTaskDelay`、Mutex、Semaphore 等阻塞 API。
+
+### Q4：`PICC_GetLinkState` 和 `PICC_GetAppLinkState` 区别？
+
+| API | 层级 | 判断依据 | 适用场景 |
+|-----|------|----------|----------|
+| `PICC_GetLinkState(channelId)` | 物理通道 | 心跳 Ping/Pong | 整体通道是否可用 |
+| `PICC_GetAppLinkState(localId)` | 应用级 | 连接握手状态 | 特定应用是否已建链 |
+
+### Q5：v3.0 相比旧版本的主要变化？
+
+1. **移除 `PICC_AppIndex_e` 枚举** — `localId` 直接作为数组索引，支持 120+ 应用。
+2. **`PICC_Init()` 参数简化** — 不再需要 `appIndex` 参数，只传 `config` 指针。
+3. **新增 `PICC_GetAppLinkState()`** — 支持 per-app 链路状态查询。
+4. **新增 `Client_linkReq_PeriodMs`** — CLIENT 可自定义连接请求周期。
+5. **Slot 自动分配** — 根据 `role` 自动推导，无需手动指定。
+6. **共享 Link 池** — 相同 (remoteId, channelId, role) 的多个应用共享一个链路上下文。
+7. **`PICC_GetMethodData` 新增 `outSessionId` 出参** — 用于纯轮询模式下获取请求的 SessionID 以正确回复 Response。

@@ -3,15 +3,16 @@
  * @brief PICC Driver Public API — Application Layer Interface
  *
  * This is the ONLY header file that application layers (Pwsm, OTA, etc.) should include.
- * It exposes exactly 8 public functions:
- *   - PICC_Init()          : Register an application
- *   - PICC_SendEvent()     : Send Event notification (M->A)  [declared in picc_service.h]
- *   - PICC_MethodRequest() : Send Method request, Client (M->A)
- *   - PICC_MethodResponse(): Send Method response, Server (M->A)
- *   - PICC_GetMethodData() : Get received Method request data (A->M)
- *   - PICC_GetResponseData(): Get received Method response data (A->M)
- *   - PICC_GetEventData()  : Get received Event data (A->M)
- *   - PICC_GetLinkState()  : Query link connection state
+ * It exposes exactly 9 public functions:
+ *   - PICC_Init()            : Register an application (localId as direct index)
+ *   - PICC_SendEvent()       : Send Event notification (M->A)
+ *   - PICC_MethodRequest()   : Send Method request, Client (M->A)
+ *   - PICC_MethodResponse()  : Send Method response, Server (M->A)
+ *   - PICC_GetMethodData()   : Get received Method request data (A->M)
+ *   - PICC_GetResponseData() : Get received Method response data (A->M)
+ *   - PICC_GetEventData()    : Get received Event data (A->M)
+ *   - PICC_GetLinkState()    : Query physical channel health (heartbeat-based)
+ *   - PICC_GetAppLinkState() : Query per-app link connection state
  *
  * Copyright 2024 NXP
  * All Rights Reserved.
@@ -95,8 +96,8 @@ extern "C" {
  * Slot configuration:
  *   Slot counts (methodSlots / responseSlots / eventSlots) are now
  *   automatically derived from the role field:
- *     - SERVER: methodSlots=6, responseSlots=0, eventSlots=6
- *     - CLIENT: methodSlots=0, responseSlots=6, eventSlots=6
+ *     - SERVER: methodSlots=2, responseSlots=0, eventSlots=2
+ *     - CLIENT: methodSlots=0, responseSlots=2, eventSlots=2
  *   Applications no longer need to specify slot counts manually.
  *   See picc_mailbox.h (PICC_SERVER_DEFAULT_xxx / PICC_CLIENT_DEFAULT_xxx)
  *   for the default values, which can be tuned for your system.
@@ -271,6 +272,8 @@ sint8 PICC_GetEventData(uint8 localId, uint8 eventId,
 
 /*==================================================================================================
  *                              Public API — Status Query (2 functions)
+ *                              PICC_GetLinkState:    Physical channel health (heartbeat)
+ *                              PICC_GetAppLinkState: Per-app link state (handshake)
  *==================================================================================================*/
 
 /**

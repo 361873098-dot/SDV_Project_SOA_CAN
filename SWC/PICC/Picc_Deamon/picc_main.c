@@ -1,5 +1,5 @@
 /**
- * @file main.c
+ * @file picc_main.c
  * @brief M-Core Inter-Core Communication Application - Main Program
  *
  * IPC Shared Memory Driver application with PICC middleware.

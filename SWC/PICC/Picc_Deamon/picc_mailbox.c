@@ -362,13 +362,13 @@ sint8 PICC_MailboxRegisterApp(const PICC_AppConfig_t *config)
      *         receives Events from Server → needs eventSlots
      */
     if ((uint8)config->role == (uint8)PICC_ROLE_SERVER) {
-        methodSlots   = PICC_SERVER_DEFAULT_METHOD_SLOTS;   /* 6 */
+        methodSlots   = PICC_SERVER_DEFAULT_METHOD_SLOTS;   /* 2 */
         responseSlots = 0U;                                  /* Server never waits for Response */
-        eventSlots    = PICC_SERVER_DEFAULT_EVENT_SLOTS;     /* 6 */
+        eventSlots    = PICC_SERVER_DEFAULT_EVENT_SLOTS;     /* 2 */
     } else {
         methodSlots   = 0U;                                  /* Client never receives Method Requests */
-        responseSlots = PICC_CLIENT_DEFAULT_RESPONSE_SLOTS;  /* 6 */
-        eventSlots    = PICC_CLIENT_DEFAULT_EVENT_SLOTS;      /* 6 */
+        responseSlots = PICC_CLIENT_DEFAULT_RESPONSE_SLOTS;  /* 2 */
+        eventSlots    = PICC_CLIENT_DEFAULT_EVENT_SLOTS;      /* 2 */
     }
 
     totalNeeded = (uint16)methodSlots + (uint16)responseSlots + (uint16)eventSlots;

@@ -2,7 +2,7 @@
  * @file picc_api.c
  * @brief PICC Driver Public API — Implementation
  *
- * This file contains ONLY the 8 public API functions.
+ * This file contains ONLY the 9 public API functions.
  * All internal logic is delegated to:
  *   - picc_mailbox.c  : App registration, mailbox store/read
  *   - picc_service.c  : Event sending, method/response protocol
