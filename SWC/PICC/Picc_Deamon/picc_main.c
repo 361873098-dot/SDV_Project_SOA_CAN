@@ -198,7 +198,7 @@ static void PICC_DiagRecordAdd(PICC_DiagRecord_t *record, const uint8 *data, uin
             continue;
         }
 
-        if ((msgPtr[0] != 81U) || (msgPtr[2] != 91U)) {
+        if ((msgPtr[0] != 71U) || (msgPtr[2] != 76U)) {
             offset += msgLen;
             continue;
         }
@@ -351,6 +351,16 @@ void PICC_data_mng_rx_cb(void *arg, const uint8 instance, uint8 chan_id, void *b
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
+/**
+ * @brief IPCF unmanaged channel RX callback
+ *
+ * Called by IPCF driver when a new message arrives on an unmanaged channel.
+ *
+ * @param[in] arg      Callback argument (pointer to g_unmngDat)
+ * @param[in] instance IPCF instance ID
+ * @param[in] chan_id  Channel ID the message was received on
+ * @param[in] mem      Pointer to the received unmanaged memory buffer
+ */
 void PICC_data_unmng_rx_cb(void *arg, const uint8 instance, uint8 chan_id, void *mem)
 {
     App_Data_t *appPtr = (App_Data_t *)(*((uintptr *)arg));
@@ -369,6 +379,15 @@ void PICC_data_unmng_rx_cb(void *arg, const uint8 instance, uint8 chan_id, void 
  *                                   Infrastructure Initialization
  *==================================================================================================*/
 
+/**
+ * @brief Heartbeat timeout handler callback
+ *
+ * Called by the heartbeat module when a timeout is detected on a channel.
+ * Triggers a link reconnection process.
+ *
+ * @param[in] instanceId IPCF instance ID
+ * @param[in] channelId  IPCF channel ID where the timeout occurred
+ */
 static void PICC_HeartbeatTimeoutHandler(uint8 instanceId, uint8 channelId)
 {
     PICC_LinkTriggerReconnect(instanceId, channelId);
@@ -401,6 +420,14 @@ void PICC_InfraInit(void)
 
 /**
  * @brief Initialize specified IPCF channel (Stack + Heartbeat)
+ *
+ * Configures the communication stack parameters (size, period, CRC) and
+ * adds the channel to the heartbeat monitoring module.
+ *
+ * @param[in] instanceId IPCF instance ID
+ * @param[in] channelId  IPCF channel ID to initialize (e.g., 1 or 2)
+ *
+ * @return PICC_E_OK on success, or a negative error code on failure
  */
 sint8 PICC_InitChannel(uint8 instanceId, uint8 channelId)
 {
@@ -438,6 +465,16 @@ sint8 PICC_InitChannel(uint8 instanceId, uint8 channelId)
  *                                         PreOS Initialization
  *==================================================================================================*/
 
+/**
+ * @brief Early OS-level initialization for PICC and IPCF
+ *
+ * This function must be called early in the system startup before the FreeRTOS
+ * scheduler starts running tasks. It creates the RX message queue, initializes
+ * the IPCF shared memory driver, sets up unmanaged memory control channels,
+ * and initializes all underlying PICC infrastructure layers including Stack,
+ * Service, Link, Mailbox, and Heartbeat. Finally, it initializes the specific
+ * IPCF channels used for communication.
+ */
 void PICC_PreOS_Init(void)
 {
     sint8 err = -IPC_SHM_E_INVAL;
@@ -638,6 +675,16 @@ void PICC_Rx_Msg_10ms_Task(void *params)
  *                                         Error Handling
  *==================================================================================================*/
 
+/**
+ * @brief Global error handler for PICC module
+ *
+ * Records the last error code, file name, and line number for diagnostic purposes,
+ * and increments the global error counter.
+ *
+ * @param[in] error The error code to record
+ * @param[in] file  Pointer to the source file name string where the error occurred
+ * @param[in] line  The line number where the error occurred
+ */
 void PICC_handle_error(sint8 error, const char *file, int line)
 {
     g_appData.last_error = error;
