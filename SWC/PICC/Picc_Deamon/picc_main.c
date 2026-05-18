@@ -197,7 +197,7 @@ static void PICC_DiagRecordAdd(PICC_DiagRecord_t *record, const uint8 *data, uin
             offset += msgLen;
             continue;
         }
-
+		/*server : msgPtr[0] provideID   msgPtr[2] ConsumerID */
         if ((msgPtr[0] != 71U) || (msgPtr[2] != 76U)) {
             offset += msgLen;
             continue;
