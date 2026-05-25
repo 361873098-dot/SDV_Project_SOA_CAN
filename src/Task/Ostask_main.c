@@ -51,6 +51,7 @@ extern "C"{
 /* Event-driven task declaration */
 #include "Picc_main.h"               /* App_Rx_Msg_10ms_Task()                  */
 #include "hm.h"
+#include "stm.h"
 /*==================================================================================================
  *                                         MACRO DEFINITIONS
  *==================================================================================================*/
@@ -58,8 +59,8 @@ extern "C"{
 /** Unified 1ms periodic task stack size (Words) */
 #define OSTASK_1MS_STACK_SIZE       (128U)  /* 512B */
 
-/** Unified 10ms periodic task stack size (Words) */
-#define OSTASK_10MS_STACK_SIZE      (256U)  /* 1KB */
+/** Unified 10ms periodic task stack size (Words) — expanded for Stm_Main() NVM processing */
+#define OSTASK_10MS_STACK_SIZE      (320U)  /* 1.25KB */
 
 /** PICC RX message processing task stack size (Words) */
 #define OSTASK_RX_MSG_STACK_SIZE    (192U)  /* 768B */
@@ -150,6 +151,8 @@ void TASK_M0_10MS(void)
     DiagMgmt_Main();
 
     Hm_Main();
+
+    Stm_Main();
 
 	#if(PICC_DIAG_RECORD_ENABLE==1U)
 	{

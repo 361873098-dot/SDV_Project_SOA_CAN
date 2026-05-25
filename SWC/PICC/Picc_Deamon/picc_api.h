@@ -52,7 +52,7 @@ typedef enum {
     PICC_APP_PWR      = 0U,   /**< Power Management    (ProviderID: 0x01) */
     PICC_APP_OTA      = 1U,   /**< OTA                 (ProviderID: 0x11) */
     PICC_APP_HEALTH   = 2U,   /**< Health Management   (ProviderID: 0x21) */
-    PICC_APP_COMM     = 3U,   /**< Communication Mgmt  (ProviderID: 0x31) */
+    PICC_APP_STM_CLI  = 3U,   /**< STM Client Role     (ConsumerID: 0x2A) */
     PICC_APP_STORAGE  = 4U,   /**< Storage Module      (ProviderID: 0x41) */
     PICC_APP_DIAG     = 5U,   /**< Diagnostic Module   (ProviderID: 0x51) */
     PICC_APP_TIMESYNC = 6U,   /**< Time Synchronization(ProviderID: 0x61) */

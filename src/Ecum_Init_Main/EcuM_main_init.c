@@ -51,6 +51,7 @@ extern "C" {
 #include "task.h"
 #include "Mcu.h"
 #include "hm.h"
+#include "stm.h"
 
 #include <string.h>
 #include "System_Cpuload.h"
@@ -77,6 +78,7 @@ static void App_Init_All(void)
   SoaAdapter_Init();
   DiagMgmt_Init();
   Hm_Init();
+  Stm_Init();
 }
 
 /*==================================================================================================

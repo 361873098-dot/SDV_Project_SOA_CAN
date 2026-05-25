@@ -27,8 +27,8 @@ extern "C" {
 /** Max number of different msgId slots per app per type */
 #define PICC_RX_MAX_SLOTS       (6U)
 
-/** Max payload bytes stored per slot */
-#define PICC_RX_MAX_DATA_LEN    (32U)
+/** Max payload bytes stored per slot (expanded from 32 to 80 for STM NVM blocks up to 64 bytes + protocol overhead) */
+#define PICC_RX_MAX_DATA_LEN    (80U)
 
 /*==================================================================================================
  *                                         Internal Types
