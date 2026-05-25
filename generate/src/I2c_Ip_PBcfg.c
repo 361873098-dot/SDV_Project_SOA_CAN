@@ -142,6 +142,30 @@ const I2c_Ip_MasterConfigType I2c_IICMasterChannel0 =
     0
 };
 
+/* Channel configuration for channel IIC_0 - configured as master */
+const I2c_Ip_MasterConfigType I2c_IICMasterChannel1 =
+{
+    /* Slave address */
+    0U,
+    /* Baudrate */
+    48U,
+    /* Transfer Type */
+    I2C_USING_INTERRUPTS,
+    /* Dma tx channel */
+    (uint8)0U,
+    /* Dma rx channel */
+    (uint8)0U,
+    /* Glitch filter */
+    (boolean)FALSE,
+    /* Master Callback */
+    NULL_PTR,
+    /* I2c Master Callback Parameter */
+    1,
+
+    /* Master Index */
+    1
+};
+
 
 
 #define I2C_STOP_SEC_CONFIG_DATA_UNSPECIFIED

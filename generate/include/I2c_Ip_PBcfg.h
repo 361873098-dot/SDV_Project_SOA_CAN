@@ -104,6 +104,14 @@ extern const I2c_Ip_MasterConfigType I2c_IICMasterChannel0;
 
 #define I2C_STOP_SEC_CONFIG_DATA_UNSPECIFIED
 #include "I2c_MemMap.h"
+#define I2C_START_SEC_CONFIG_DATA_UNSPECIFIED
+#include "I2c_MemMap.h"
+
+/* Channel configuration for channel IIC_0 - configured as master */
+extern const I2c_Ip_MasterConfigType I2c_IICMasterChannel1;
+
+#define I2C_STOP_SEC_CONFIG_DATA_UNSPECIFIED
+#include "I2c_MemMap.h"
 
 /*==================================================================================================
 *                                    FUNCTION PROTOTYPES

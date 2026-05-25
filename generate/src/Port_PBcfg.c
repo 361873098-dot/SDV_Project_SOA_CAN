@@ -115,6 +115,8 @@ static const uint32 au32Port_PinToPartitionMap[PORT_MAX_CONFIGURED_PADS_U16] =
     (uint32)0x00000001,
     (uint32)0x00000001,
     (uint32)0x00000001,
+    (uint32)0x00000001,
+    (uint32)0x00000001,
     (uint32)0x00000001
 };
 
@@ -142,8 +144,6 @@ static const Port_Siul2_UnUsedPinType Port_aUnusedPads[PORT_MAX_UNUSED_PADS_U16]
     { (uint16)12, PORT_SIUL2_0_U8 },
     { (uint16)14, PORT_SIUL2_0_U8 },
     { (uint16)15, PORT_SIUL2_0_U8 },
-    { (uint16)16, PORT_SIUL2_0_U8 },
-    { (uint16)17, PORT_SIUL2_0_U8 },
     { (uint16)18, PORT_SIUL2_0_U8 },
     { (uint16)19, PORT_SIUL2_0_U8 },
     { (uint16)20, PORT_SIUL2_0_U8 },
@@ -309,7 +309,11 @@ static const Port_Siul2_PinConfigType Port_aUsedPinConfigs[PORT_MAX_CONFIGURED_P
     /* Mscr Id, Mscr Value, Mscr Siul Instance, Output Level, Direction, IsGpio, Direction Configurable, Mode Changeable, Is Imcr Available, Imcr Id */
     { (uint16)174, (uint32)0x00093000, (uint8)PORT_SIUL2_1_U8, (uint8)1, PORT_PIN_IN, (boolean)FALSE, (boolean)FALSE, (boolean)TRUE, (boolean)TRUE, 495 },
     /* Mscr Id, Mscr Value, Mscr Siul Instance, Output Level, Direction, IsGpio, Direction Configurable, Mode Changeable, Is Imcr Available, Imcr Id */
-    { (uint16)13, (uint32)0x00210000, (uint8)PORT_SIUL2_0_U8, (uint8)0, PORT_PIN_OUT, (boolean)TRUE, (boolean)TRUE, (boolean)TRUE, (boolean)FALSE, 65535 }
+    { (uint16)13, (uint32)0x00210000, (uint8)PORT_SIUL2_0_U8, (uint8)0, PORT_PIN_OUT, (boolean)TRUE, (boolean)TRUE, (boolean)TRUE, (boolean)FALSE, 65535 },
+    /* Mscr Id, Mscr Value, Mscr Siul Instance, Output Level, Direction, IsGpio, Direction Configurable, Mode Changeable, Is Imcr Available, Imcr Id */
+    { (uint16)16, (uint32)0x00393001, (uint8)PORT_SIUL2_0_U8, (uint8)0, PORT_PIN_INOUT, (boolean)FALSE, (boolean)FALSE, (boolean)TRUE, (boolean)TRUE, 53 },
+    /* Mscr Id, Mscr Value, Mscr Siul Instance, Output Level, Direction, IsGpio, Direction Configurable, Mode Changeable, Is Imcr Available, Imcr Id */
+    { (uint16)17, (uint32)0x00390001, (uint8)PORT_SIUL2_0_U8, (uint8)2, PORT_PIN_INOUT, (boolean)FALSE, (boolean)FALSE, (boolean)TRUE, (boolean)TRUE, 54 }
 };
 
 /* SIUL2_0 */
@@ -371,8 +375,8 @@ static const Port_Siul2_ImcrConfigType Port_aSIUL2_0_ImcrInitConfig[PORT_SIUL2_0
     (uint8)0x00,
     (uint8)0x00,
     (uint8)0x00,
-    (uint8)0x00,
-    (uint8)0x00,
+    (uint8)0x02,
+    (uint8)0x02,
     (uint8)0x00,
     (uint8)0x00,
     (uint8)0x00,

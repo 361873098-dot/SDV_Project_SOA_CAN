@@ -521,10 +521,10 @@ void SoaAdapter_Main(void)
     s_soaState.prevLinkState = curLinkState;
 
 
-    /* 5. Check Notifiers for value changes and send if changed */
+    /* 4 . Check Notifiers for value changes and send if changed */
     SOA_CheckAndSendNotifiers();
 
-    /* 6. Poll and handle Getter/Setter requests from A-Core */
+    /* 5. Poll and handle Getter/Setter requests from A-Core */
     SOA_PollMethodRequests();
 
 

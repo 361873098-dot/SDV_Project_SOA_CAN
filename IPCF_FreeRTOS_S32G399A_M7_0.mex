@@ -1149,11 +1149,6 @@
                   <data type="Version">0.1.0</data>
                </feature>
             </dependency>
-            <dependency resourceType="Tool" resourceId="Clocks" description="外围设备工具需要 Clocks 工具，但它已被禁用。" problem_level="2" source="Peripherals">
-               <feature name="enabled" evaluation="equal">
-                  <data>true</data>
-               </feature>
-            </dependency>
          </dependencies>
          <generated_project_files>
             <file path="board/Siul2_Port_Ip_Cfg.h" update_enabled="true"/>
@@ -3131,6 +3126,46 @@
                                        <setting name="PortPinSlewRate" value="SRE_3_3V_50MHZ_b100"/>
                                        <array name="PortPinEcucPartitionRef"/>
                                     </struct>
+                                    <struct name="11">
+                                       <setting name="Name" value="I2C0_SDA_PB_00"/>
+                                       <setting name="PortPinPue" value="true"/>
+                                       <setting name="PortPinPus" value="true"/>
+                                       <setting name="PortPinSafeMode" value="false"/>
+                                       <setting name="PortPinOde" value="true"/>
+                                       <setting name="PortPinWithReadBack" value="false"/>
+                                       <setting name="PortPinRcvr" value="false"/>
+                                       <setting name="PortPinDirectionChangeable" value="true"/>
+                                       <setting name="PortPinModeChangeable" value="true"/>
+                                       <setting name="PortPinSiul2Instance" value="SIUL2_0"/>
+                                       <setting name="PortPinId" value="12"/>
+                                       <setting name="PortPinPcr" value="16"/>
+                                       <setting name="PortPinDirection" value="PORT_PIN_INOUT"/>
+                                       <setting name="PortPinInitialMode" value="PORT_GPIO_MODE"/>
+                                       <setting name="PortPinMode" value="I2C_0_I2C0_SDA_INOUT"/>
+                                       <setting name="PortPinLevelValue" value="PORT_PIN_LEVEL_LOW"/>
+                                       <setting name="PortPinSlewRate" value="SRE_3_3V_50MHZ_b100"/>
+                                       <array name="PortPinEcucPartitionRef"/>
+                                    </struct>
+                                    <struct name="12">
+                                       <setting name="Name" value="I2C0_SCL_PB_01"/>
+                                       <setting name="PortPinPue" value="false"/>
+                                       <setting name="PortPinPus" value="false"/>
+                                       <setting name="PortPinSafeMode" value="false"/>
+                                       <setting name="PortPinOde" value="true"/>
+                                       <setting name="PortPinWithReadBack" value="false"/>
+                                       <setting name="PortPinRcvr" value="false"/>
+                                       <setting name="PortPinDirectionChangeable" value="true"/>
+                                       <setting name="PortPinModeChangeable" value="true"/>
+                                       <setting name="PortPinSiul2Instance" value="SIUL2_0"/>
+                                       <setting name="PortPinId" value="13"/>
+                                       <setting name="PortPinPcr" value="17"/>
+                                       <setting name="PortPinDirection" value="PORT_PIN_INOUT"/>
+                                       <setting name="PortPinInitialMode" value="PORT_GPIO_MODE"/>
+                                       <setting name="PortPinMode" value="I2C_0_I2C0_SCL_INOUT"/>
+                                       <setting name="PortPinLevelValue" value="PORT_PIN_LEVEL_NOTCHANGED"/>
+                                       <setting name="PortPinSlewRate" value="SRE_3_3V_50MHZ_b100"/>
+                                       <array name="PortPinEcucPartitionRef"/>
+                                    </struct>
                                  </array>
                               </struct>
                            </array>
@@ -3435,6 +3470,30 @@
                                  </struct>
                                  <struct name="I2cSlaveConfiguration">
                                     <setting name="Name" value="I2c_IICSlaveChannel0"/>
+                                    <setting name="I2cSlaveAddress" value="0x32"/>
+                                    <setting name="I2cSlaveListening" value="false"/>
+                                    <setting name="I2cSlaveGlitchFilter" value="false"/>
+                                 </struct>
+                              </struct>
+                              <struct name="1">
+                                 <setting name="Name" value="I2cChannel_1"/>
+                                 <setting name="I2cChannelId" value="1"/>
+                                 <setting name="I2cHwChannel" value="IIC_0"/>
+                                 <setting name="I2cMasterSlaveConfiguration" value="MASTER_MODE"/>
+                                 <array name="I2cChannelEcucPartitionRef"/>
+                                 <struct name="I2cMasterConfiguration">
+                                    <setting name="Name" value="I2c_IICMasterChannel1"/>
+                                    <setting name="I2cAsyncMethod" value="I2C_USING_INTERRUPTS"/>
+                                    <setting name="I2cMasterGlitchFilter" value="false"/>
+                                    <array name="I2cTxDmaChannel"/>
+                                    <array name="I2cRxDmaChannel"/>
+                                    <setting name="I2cIbcValue" value="0x30"/>
+                                    <array name="I2cClockRef">
+                                       <setting name="0" value="/Mcu/Mcu/McuModuleConfiguration/McuClockSettingConfig_0/McuClockReferencePoint_0"/>
+                                    </array>
+                                 </struct>
+                                 <struct name="I2cSlaveConfiguration">
+                                    <setting name="Name" value="I2c_IICSlaveChannel1"/>
                                     <setting name="I2cSlaveAddress" value="0x32"/>
                                     <setting name="I2cSlaveListening" value="false"/>
                                     <setting name="I2cSlaveGlitchFilter" value="false"/>

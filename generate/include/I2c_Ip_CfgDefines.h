@@ -70,7 +70,7 @@ extern "C"
                                        DEFINES AND MACROS
 ==================================================================================================*/
 
-#define I2C_IP_NUMBER_OF_MASTER_INSTANCES 1U
+#define I2C_IP_NUMBER_OF_MASTER_INSTANCES 2U
 #define I2C_IP_NUMBER_OF_SLAVE_INSTANCES 0U
 
 /**

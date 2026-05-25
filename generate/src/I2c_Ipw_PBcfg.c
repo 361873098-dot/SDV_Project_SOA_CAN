@@ -125,6 +125,13 @@ const IIC_Ipw_HwChannelConfigType I2c_Ipw_ChannelConfig0 =
     NULL_PTR
 };
 
+/* Config structure for channel IIC_0 */
+const IIC_Ipw_HwChannelConfigType I2c_Ipw_ChannelConfig1 =
+{
+    &I2c_IICMasterChannel1,
+    NULL_PTR
+};
+
 
 
 #define I2C_STOP_SEC_CONFIG_DATA_UNSPECIFIED

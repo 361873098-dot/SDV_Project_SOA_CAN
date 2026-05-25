@@ -78,7 +78,7 @@ extern "C"{
 /**
 * @brief   Total number of I2c channel configured.
 */
-#define I2C_HW_MAX_CONFIG        1U
+#define I2C_HW_MAX_CONFIG        2U
 
 /**
 * @brief   Total number of available hardware I2C channels.
@@ -107,10 +107,12 @@ extern "C"{
 * @brief          Link I2C channels symbolic names with I2C channel IDs.
 */
 #define I2C_IIC_4  4U
+#define I2C_IIC_0  0U
 /**
 * @brief          I2C channels symbolic names with I2C channel IDs.
 */
 #define I2cChannel_0  0U
+#define I2cChannel_1  1U
 /**
 * @brief          spurious coreid.
 */
@@ -120,6 +122,7 @@ extern "C"{
 * @brief          Symbolic names for configured channels.
 */
 #define I2cConf_I2cChannel_I2cChannel_0  0U
+#define I2cConf_I2cChannel_I2cChannel_1  1U
 
 
 /**
