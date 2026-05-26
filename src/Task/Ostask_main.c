@@ -51,7 +51,7 @@ extern "C"{
 /* Event-driven task declaration */
 #include "Picc_main.h"               /* App_Rx_Msg_10ms_Task()                  */
 #include "hm.h"
-#include "stm.h"
+#include "stm_main.h"
 /*==================================================================================================
  *                                         MACRO DEFINITIONS
  *==================================================================================================*/

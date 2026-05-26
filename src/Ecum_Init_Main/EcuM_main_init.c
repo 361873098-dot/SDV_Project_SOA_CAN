@@ -51,7 +51,7 @@ extern "C" {
 #include "task.h"
 #include "Mcu.h"
 #include "hm.h"
-#include "stm.h"
+#include "stm_main.h"
 
 #include <string.h>
 #include "System_Cpuload.h"

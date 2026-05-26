@@ -44,7 +44,7 @@
 *  include files
 ***********************************************************************************************************************/
 #include "Platform.h"
-#include "stm.h"
+#include "stm_main.h"
 #include "stm_cnf.h"
 #include "stm_nvm.h"
 #include "picc_api.h"
