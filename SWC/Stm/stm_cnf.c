@@ -111,7 +111,7 @@ void Stm_ProcessTest(void)
 
         case 3U:
             /* Case 3: Request A-core to read Item 2 (dataId=0x0002) via Method 0x05 */
-            NVM_test_result = Stm_RequestReadFromA(0x0002U);
+            NVM_test_result = Stm_RequestReadFromA(STM_METHOD_M_ASYNC_READ, 0x0002U);
             break;
 
         case 4U:

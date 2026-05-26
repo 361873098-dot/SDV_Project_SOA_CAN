@@ -1,6 +1,6 @@
 # 存储中间件 (STM) TRACE32 交互式测试指南
 
-本文档描述了如何使用集成在 **S32G399A M7 微控制器** 平台存储中间件 (STM) 模块中的交互式测试框架。通过在 **Lauterbach TRACE32** 调试器中修改全局变量 `NVM_test_flag` 的值，开发人员可以动态执行本地 NVM 读写操作、格式化 EEPROM 持久化存储，并触发跨核（M 核到 A 核）的通信数据验证，而无需重新烧录芯片。
+本文档描述了如何使用集成在 **S32G399A M7 微控制器** 平台存储中间件 (STM) 模块中的交互式测试框架。通过在 **Lauterbach TRACE32** 调试器中修改全局变量 `NVM_test_flag` 的值（范围 1 到 7），开发人员可以动态执行本地 NVM 读写操作、格式化 EEPROM 持久化存储，并触发跨核（M 核到 A 核）的通信数据验证，而无需重新烧录芯片。
 
 ---
 
@@ -12,7 +12,7 @@ STM 模块向调试器暴露了一组全局变量。这些变量在 `Stm_Main()`
 
 | 变量名称 | 类型 | 作用域 | 用途/说明 |
 | :--- | :--- | :--- | :--- |
-| **`NVM_test_flag`** | `volatile uint8` | 全局变量 | **测试用例选择器**。当设置为非零值时触发对应的测试分支。执行完成后会自动重置为 `0`。 |
+| **`NVM_test_flag`** | `volatile uint8` | 全局变量 | **测试用例选择器**。当设置为非零值（1~7）时触发对应的测试分支。执行完成后会自动重置为 `0`。 |
 | **`NVM_test_write_val`** | `uint8` | 全局变量 | 写入测试的**种子值**。写入数据块的数据从此值开始逐字节递增。（默认值：`0xAA`） |
 | **`NVM_test_read_buf[16]`**| `uint8` | 全局变量 | **读取缓冲区**。在读取测试分支中接收来自本地 NVM 的数据。 |
 | **`NVM_test_read_len`** | `uint16` | 全局变量 | **实际读取长度**。指示成功加载到 `NVM_test_read_buf` 中的有效字节数。 |
@@ -57,7 +57,7 @@ IF !symbol.exist(NVM_test_flag)
 
 PRINT "[+] 符号验证成功！"
 PRINT ""
-PRINT "以下是十六进制格式的 STM 观测变量窗口："
+PRINT "以下是十六进制格式 of STM 观测变量窗口："
 
 ; 3. 在屏幕上方打开一个变量监视窗口
 Var.View %HEX NVM_test_flag NVM_test_write_val NVM_test_read_buf NVM_test_read_len NVM_test_result
@@ -78,9 +78,9 @@ ENDDO
 
 ---
 
-## 3. 详细测试用例
+## 3. 详细测试用例（用例序号与 NVM_test_flag 完美对应）
 
-### 测试用例 1：本地 RAM 与 EEPROM 写入（数据块 1）
+### 测试用例 1 (NVM_test_flag = 1) ：本地 RAM 与 EEPROM 写入（数据块 1）
 * **测试目的**：验证写入数据块 1（`dataId = 0x0001`，最大长度 8 字节）是否能正确更新 RAM 镜像并即时写入物理 EEPROM。
 * **操作步骤**：
   1. 在 TRACE32 中设置写入种子值：
@@ -105,7 +105,7 @@ ENDDO
 
 ---
 
-### 测试用例 2：本地 NVM 读取（数据块 1）
+### 测试用例 2 (NVM_test_flag = 2) ：本地 NVM 读取（数据块 1）
 * **测试目的**：从 RAM 镜像中检索数据块 1 已持久化的数据，并验证其数据完整性。
 * **操作步骤**：
   1. 触发 Case 2：
@@ -120,7 +120,42 @@ ENDDO
 
 ---
 
-### 测试用例 3：本地 RAM 与 EEPROM 写入（数据块 2）
+### 测试用例 3 (NVM_test_flag = 3) ：跨核异步读取请求（Method 0x05 / 0x03 统一入口）
+* **测试目的**：测试 M 核作为 Client 端的跨核读取能力，验证重构后的统一读请求 API `Stm_RequestReadFromA(methodId, dataId)`。此 API 统一支持 Method 0x03（读取最新数据）与 Method 0x05（读取滚动数据）的数据拉取。
+* **操作步骤**：
+  1. 确保 M 核与 A 核的跨核通信链路已建立成功，且状态机处于 `RUNNING`（运行）状态。
+  2. 触发 Case 3（代码内部会调用 `Stm_RequestReadFromA(STM_METHOD_M_ASYNC_READ, 0x0002U)`）：
+     ```orcas
+     Var.set NVM_test_flag = 3
+     ```
+* **预期结果**：
+  * M 核将组装一个 Method 0x05 (`STM_METHOD_M_ASYNC_READ`) 的请求报文，并使用递增的 `SessionID`。
+  * 请求报文通过 IPCF 通道成功发送给 A 核。
+  * 当 A 核作为 Provider 回复 `RESPONSE`（包含请求的数据负载）后，M 核接收中断会解析该 `SessionID` 进行匹配，自动更新本地的 RAM 镜像与 EEPROM 存储。之后可通过触发**测试用例 6**来验证接收到的新数据。
+  * > [!NOTE]
+  * > **接口统一重构说明**：为了优化代码存储空间并增强复用性，`Stm_RequestReadFromA` 已经升级为二合一的通用读取函数。
+  * > * 调用 `Stm_RequestReadFromA(STM_METHOD_M_READ_FROM_A, dataId)` 即发起 **Method 0x03** 读取请求；
+  * > * 调用 `Stm_RequestReadFromA(STM_METHOD_M_ASYNC_READ, dataId)` 即发起 **Method 0x05** 读取请求。
+  * > 无论哪种请求，均公用同一套挂起追踪结构体 `Stm_PendingReadReq` 进行 SessionID 的自动应答匹配与接收，让读取流程高度解耦且维护成本极低。
+
+---
+
+### 测试用例 4 (NVM_test_flag = 4) ：持久化 EEPROM 格式化测试
+* **测试目的**：强制清空 EEPROM 格式并清除 RAM 镜像，验证系统的初始化回退与首飞（First-run）逻辑。
+* **操作步骤**：
+  1. 触发 Case 4：
+     ```orcas
+     Var.set NVM_test_flag = 4
+     ```
+* **预期结果**：
+  * EEPROM 地址 `0x10` 的 Magic Byte 重新写入为 `0xA5`。
+  * EEPROM 中所有 5 个已配置数据块的 valid 标志被设置为 `FALSE` (`0x00`)，擦除其校验状态。
+  * 所有的 RAM 镜像清空为 `0`，并标记为 clean。
+  * 执行**测试用例 2**，由于数据块 1 已失效，API 应返回 `E_NOT_OK` (`0x01`)。
+
+---
+
+### 测试用例 5 (NVM_test_flag = 5) ：本地 RAM 与 EEPROM 写入（数据块 2）
 * **测试目的**：验证 NVM 数据块 2（`dataId = 0x0002`，最大长度 16 字节）的分段物理写入安全性。
 * **操作步骤**：
   1. 设置写入种子值：
@@ -143,7 +178,7 @@ ENDDO
 
 ---
 
-### 测试用例 4：本地 NVM 读取（数据块 2）
+### 测试用例 6 (NVM_test_flag = 6) ：本地 NVM 读取（数据块 2）
 * **测试目的**：读取并检索数据块 2 存储的 16 字节持久化数据。
 * **操作步骤**：
   1. 触发 Case 6：
@@ -158,22 +193,7 @@ ENDDO
 
 ---
 
-### 测试用例 5：跨核异步读取请求（Method 0x05）
-* **测试目的**：测试 M 核作为 Client 端的跨核读取能力，请求 A 核传输数据块 2（`dataId = 0x0002`）的最新数据。
-* **操作步骤**：
-  1. 确保 M 核与 A 核的跨核通信链路已建立成功，且状态机处于 `RUNNING`（运行）或 `SYNC_TO_A`（同步）状态。
-  2. 触发 Case 3：
-     ```orcas
-     Var.set NVM_test_flag = 3
-     ```
-* **预期结果**：
-  * M 核将组装一个 Method 0x05 (`STM_METHOD_M_ASYNC_READ`) 的请求报文，并使用递增的 `SessionID`。
-  * 请求报文通过 IPCF 通道成功发送给 A 核。
-  * 当 A 核作为 Provider 回复 `RESPONSE`（包含请求的数据负载）后，M 核接收中断会解析该 `SessionID` 进行匹配，自动更新本地的 RAM 镜像与 EEPROM 存储。之后可通过触发**测试用例 4**来验证接收到的新数据。
-
----
-
-### 测试用例 6：强制触发 Method 0x04 同步到 A 核测试
+### 测试用例 7 (NVM_test_flag = 7) ：强制触发 Method 0x04 同步到 A 核测试
 * **测试目的**：验证所有本地修改（dirty，脏数据）的数据块是否能够安全、准确地同步到 A 核存储中间件中。
 * **操作步骤**：
   1. 触发 Case 7：
@@ -187,24 +207,9 @@ ENDDO
 
 ---
 
-### 测试用例 7：持久化 EEPROM 格式化测试
-* **测试目的**：强制清空 EEPROM 格式并清除 RAM 镜像，验证系统的初始化回退与首飞（First-run）逻辑。
-* **操作步骤**：
-  1. 触发 Case 4：
-     ```orcas
-     Var.set NVM_test_flag = 4
-     ```
-* **预期结果**：
-  * EEPROM 地址 `0x10` 的 Magic Byte 重新写入为 `0xA5`。
-  * EEPROM 中所有 5 个已配置数据块的 valid 标志被设置为 `FALSE` (`0x00`)，擦除其校验状态。
-  * 所有的 RAM 镜像清空为 `0`，并标记为 clean。
-  * 执行**测试用例 2**，由于数据块 1 已失效，API 应返回 `E_NOT_OK` (`0x01`)。
-
----
-
 ## 4. 栈空间与运行安全性评估
 
 为了防止在 M7 实时内核上发生系统崩溃或硬件错误（HardFault），本测试框架在设计上严格遵循了以下安全准则：
 1. **禁止在栈上分配大数组**：临时缓冲区 `tempWriteBuf[16]` 仅占用 16 字节栈空间。这确保了在 FreeRTOS 任务上下文中调用时不会引发任务栈溢出，完美保持在 `OSTASK_10MS_STACK_SIZE` 安全阈值之内。
-2. **自动清零触发机制**：触发变量 `NVM_test_flag` 在执行动作的周期末尾会被自动清零，防止测试循环往复触发，确保每次手动赋值仅执行一次动作。
+2. **自动清零触发机制**：触发变量 `NVM_test_flag` 在执行动作 of 周期末尾会被自动清零，防止测试循环往复触发，确保每次手动赋值仅执行一次动作。
 3. **严格的越界和长度检查**：所有底层读写 API 均对数据项的长度进行严格越界和一致性校验，防止由于人为写入不合规的长度数据导致系统发生内存覆写或损坏。

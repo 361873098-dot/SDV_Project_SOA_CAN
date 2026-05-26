@@ -95,16 +95,18 @@ extern Std_ReturnType Stm_ReadLocal(uint16 dataId, uint8 *data, uint16 maxLen, u
  *  Function name    : Stm_RequestReadFromA()
  *
  *  Description      : Asynchronously request A-core to send data for
- *                     the specified dataId. Uses Method 0x05 (M read from A).
+ *                     the specified dataId. Supports both Method 0x03 (M read
+ *                     from A) and Method 0x05 (M async read from A).
  *                     Response is handled in Stm_Main() state machine.
  *
- *  List of arguments: dataId - Data item identifier to request from A-core
+ *  List of arguments: methodId - Method identifier (STM_METHOD_M_READ_FROM_A or STM_METHOD_M_ASYNC_READ)
+ *                     dataId   - Data item identifier to request from A-core
  *
  *  Return value     : E_OK     - Request sent successfully
- *                     E_NOT_OK - Link not ready or send failed
+ *                     E_NOT_OK - Link not ready, invalid methodId, or send failed
  *
  ***********************************************************************************************************************/
-extern Std_ReturnType Stm_RequestReadFromA(uint16 dataId);
+extern Std_ReturnType Stm_RequestReadFromA(uint8 methodId, uint16 dataId);
 
 #if defined(__cplusplus)
 }

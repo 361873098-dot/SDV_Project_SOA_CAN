@@ -33,7 +33,7 @@ STM 为 S32G3 M 核提供**非易失性数据管理**和 **M↔A 核数据同步
 
 ```
 SWC/Stm/
-├── stm.h            — 公共 API（Stm_Init, Stm_Main, Stm_WriteLocal, Stm_ReadLocal, Stm_RequestReadFromA）
+├── stm.h            — 公共 API（Stm_Init, Stm_Main, Stm_WriteLocal, Stm_ReadLocal, Stm_RequestReadFromA(methodId, dataId)）
 ├── stm.c            — 核心逻辑：状态机 + 5 个子任务处理器 + PICC 交互
 ├── stm_cnf.h        — 配置头文件：PICC ID、Method ID、NVM 参数、状态机枚举
 ├── stm_cnf.c        — 配置实例：数据项表、重试间隔表
@@ -51,7 +51,7 @@ SWC/Stm/
 ┌─────────────────────────────────────────────────────┐
 │                   应用层 (SWC)                       │
 │  Stm_WriteLocal() / Stm_ReadLocal() /              │
-│  Stm_RequestReadFromA()                            │
+│  Stm_RequestReadFromA(methodId, dataId)            │
 └──────────────┬──────────────────────┬───────────────┘
                │                      │
 ┌──────────────▼──────────┐  ┌────────▼──────────────┐

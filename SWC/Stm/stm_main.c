@@ -456,19 +456,20 @@ static void Stm_ProcessAppReadReq(void)
         }
         else
         {
-            /* Method 0x03 response format: 2B dataId + data
-             * Minimum valid payload: 2 bytes (2B dataId) */
-            if (rspLen >= 2U)
+            /* Method 0x03 response format: 2B dataId + 2B status + data
+             * Minimum valid payload: 4 bytes (2B dataId + 2B status) */
+            if ((rspLen >= 4U) && (s_readRspBuf[2] == 0x00U) && (s_readRspBuf[3] == 0x00U))
             {
+                /* Status = 0x0000 (OK): write returned data to local NVM */
                 uint16 rspDataId = ((uint16)s_readRspBuf[0] << 8U) | (uint16)s_readRspBuf[1];
-                uint16 rspDataLen = rspLen - 2U;
+                uint16 rspDataLen = rspLen - 4U;
 
                 if (rspDataLen > 0U)
                 {
-                    (void)StmNvm_WriteFromA(rspDataId, &s_readRspBuf[2], rspDataLen);
+                    (void)StmNvm_WriteFromA(rspDataId, &s_readRspBuf[4], rspDataLen);
                 }
             }
-            /* else: payload too short - discard */
+            /* else: status != 0x0000 (NOT_OK) or payload too short - discard */
         }
 
         /* Mark request as completed - application can issue new requests */
@@ -706,19 +707,31 @@ Std_ReturnType Stm_ReadLocal(uint16 dataId, uint8 *data, uint16 maxLen, uint16 *
  * The response is handled asynchronously in Stm_ProcessAppReadReq().
  *
  * Constraints:
+/**
+ * Asynchronously request A-core to send data for the specified dataId.
+ * Supports both Method 0x03 (M read from A) and Method 0x05 (M async read from A).
+ * Response is handled in Stm_Main() state machine.
+ *
  * - Must be in RUNNING state (link established and data synced)
  * - Only one read request can be pending at a time
  *
- * @param dataId  Data item identifier to request from A-core
+ * @param methodId  Method identifier (STM_METHOD_M_READ_FROM_A or STM_METHOD_M_ASYNC_READ)
+ * @param dataId    Data item identifier to request from A-core
  * @return E_OK if request sent, E_NOT_OK if not in RUNNING state or request already pending
  */
-Std_ReturnType Stm_RequestReadFromA(uint16 dataId)
+Std_ReturnType Stm_RequestReadFromA(uint8 methodId, uint16 dataId)
 {
     static uint8 s_reqPayload[4U]; /* 2B dataId (big-endian) + 2B reserved */
     uint8 sessionId;
 
     /* Guard: must be in RUNNING state to send requests */
     if (Stm_State != STM_STATE_RUNNING)
+    {
+        return E_NOT_OK;
+    }
+
+    /* Guard: only allow Method 0x03 and Method 0x05 */
+    if ((methodId != STM_METHOD_M_READ_FROM_A) && (methodId != STM_METHOD_M_ASYNC_READ))
     {
         return E_NOT_OK;
     }
@@ -735,8 +748,8 @@ Std_ReturnType Stm_RequestReadFromA(uint16 dataId)
     s_reqPayload[2] = 0U;  /* Reserved byte */
     s_reqPayload[3] = 0U;  /* Reserved byte */
 
-    /* Send Method 0x05 request with RESPONSE expected (async on M-core) */
-    sessionId = PICC_MethodRequest(PICC_APP_STM_CLI, STM_METHOD_M_ASYNC_READ,
+    /* Send Method request with RESPONSE expected (async on M-core) over IPCF/PICC */
+    sessionId = PICC_MethodRequest(PICC_APP_STM_CLI, methodId,
                                     s_reqPayload, 4U,
                                     PICC_METHOD_WITH_RESPONSE);
     if (sessionId == 0U)
@@ -747,7 +760,7 @@ Std_ReturnType Stm_RequestReadFromA(uint16 dataId)
 
     /* Track the pending request for response matching in Stm_ProcessAppReadReq() */
     Stm_PendingReadReq.dataId = dataId;
-    Stm_PendingReadReq.methodId = STM_METHOD_M_ASYNC_READ;
+    Stm_PendingReadReq.methodId = methodId;
     Stm_PendingReadReq.sessionId = sessionId;
     Stm_PendingReadReq.active = 1U;
 
