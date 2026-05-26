@@ -206,6 +206,22 @@ extern Std_ReturnType StmNvm_FormatEeprom(void);
  ***********************************************************************************************************************/
 extern void StmNvm_ResetOnDisconnect(void);
 
+/***********************************************************************************************************************
+ *  Function name    : StmNvm_SetAllValidDirty()
+ *
+ *  Description      : Mark all valid NVM blocks as dirty.
+ *                     Called when A-core consistency check (Method 0x01) passes,
+ *                     to trigger full data sync from M-core to A-core.
+ *                     Only blocks with valid==TRUE are marked dirty; invalid
+ *                     blocks are skipped (no data to sync).
+ *
+ *  List of arguments: none
+ *
+ *  Return value     : none
+ *
+ ***********************************************************************************************************************/
+extern void StmNvm_SetAllValidDirty(void);
+
 #if defined(__cplusplus)
 }
 #endif

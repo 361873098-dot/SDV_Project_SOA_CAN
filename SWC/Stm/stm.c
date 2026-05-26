@@ -34,7 +34,7 @@
 *                   (link lost -> return to WAIT_LINK)
 *
 *    - WAIT_LINK:       Both Provider and Consumer links must be connected
-*    - WAIT_CONSISTENCY: Wait for A-core consistency check (future)
+*    - WAIT_CONSISTENCY: Wait for A-core Method 0x01 consistency check, then mark all valid NVM dirty
 *    - SYNC_TO_A:       Sync all dirty NVM data to A-core (Method 0x04)
 *    - RUNNING:          Normal operation, process all sub-tasks
 *
@@ -66,6 +66,7 @@ typedef struct {
     uint8  retryCount;   /**< Current retry attempt (0..STM_RETRY_MAX_COUNT) */
     uint16 tickCounter;   /**< Tick counter for stepped retry interval */
     uint8  active;       /**< TRUE if a sync request is in-flight and awaiting response */
+    uint8  sessionId;    /**< Session ID of the in-flight request, for precise response matching */
 } Stm_RetryState_t;
 
 static Stm_RetryState_t Stm_RetryState;
@@ -210,15 +211,14 @@ static void Stm_CheckLinkState(void)
 }
 
 /***********************************************************************************************************************
-*  Sub-task: Process RX from A-core (Server role: Method 0x01 and 0x02)
+*  Sub-task: Process RX from A-core (Server role: Method 0x02 only)
 *
 *  Polls PICC for incoming Method requests on the Provider (Server) endpoint.
-*  Two Method types are handled:
 *
-*  Method 0x01 (Consistency Check):
-*    A-core -> M-core: 2B dataId (big-endian)
-*    M-core -> A-core: 2B dataId + 2B status(0x0000=OK, 0x0001=NOT_OK) + data
-*    Purpose: A-core verifies that M-core's local data matches A-core's copy.
+*  Method 0x01 (Consistency Check) is NOT handled here.
+*  It is processed exclusively in the WAIT_CONSISTENCY state to avoid
+*  misinterpreting dataId=0x0000 (global consistency probe) as a business
+*  data block lookup, which would always return NOT_OK.
 *
 *  Method 0x02 (A-core Write):
 *    A-core -> M-core: 2B dataId (big-endian) + data
@@ -230,52 +230,25 @@ static void Stm_ProcessRxFromA(void)
     static uint8 s_methodBuf[STM_NVM_BLOCK_MAX_SIZE + 4U]; /* static to avoid stack overflow */
     static uint8 s_respBuf[STM_NVM_BLOCK_MAX_SIZE + 4U];
     uint16 methodLen;
-    uint16 respLen;
     uint8 sessionId;
-    uint8 returnCode;
 
-    /* --- Method 0x01: Consistency check --- */
+    /* --- Method 0x01: Reject consistency check outside WAIT_CONSISTENCY ---
+     * Method 0x01 is only valid during the WAIT_CONSISTENCY state (handled there).
+     * If received in RUNNING/SYNC_TO_A, reply with error so A-core knows
+     * the request was rejected (consistency check already completed). */
     if (PICC_GetMethodData(PICC_APP_STORAGE, STM_METHOD_CONSISTENCY_CHECK,
                            s_methodBuf, sizeof(s_methodBuf), &methodLen,
                            &sessionId, NULL, NULL) == PICC_E_OK)
     {
-        /* A-core sends: 2B dataId (big-endian) */
-        if (methodLen >= 2U)
-        {
-            uint16 reqDataId = ((uint16)s_methodBuf[0] << 8U) | (uint16)s_methodBuf[1];
-
-            /* Build response: 2B dataId + 2B status + data */
-            s_respBuf[0] = s_methodBuf[0];  /* dataId high byte (echo back) */
-            s_respBuf[1] = s_methodBuf[1];  /* dataId low byte (echo back) */
-
-            if (StmNvm_Read(reqDataId, &s_respBuf[4], STM_NVM_BLOCK_MAX_SIZE, &respLen) == E_OK)
-            {
-                s_respBuf[2] = 0x00U; /* status high byte */
-                s_respBuf[3] = 0x00U; /* status low byte: OK */
-                returnCode = 0x00U;
-            }
-            else
-            {
-                s_respBuf[2] = 0x00U;
-                s_respBuf[3] = 0x01U; /* status: NOT OK (dataId not found or block invalid) */
-                respLen = 0U;
-                returnCode = 0x01U;
-            }
-
-            /* Send response with original sessionId for request-response matching */
-            (void)PICC_MethodResponse(PICC_APP_STORAGE, STM_METHOD_CONSISTENCY_CHECK,
-                                       sessionId, returnCode, s_respBuf,
-                                       (uint16)(4U + respLen));
-        }
-        else
-        {
-            /* Invalid payload length (< 2 bytes) - respond with error */
-            (void)PICC_MethodResponse(PICC_APP_STORAGE, STM_METHOD_CONSISTENCY_CHECK,
-                                       sessionId, 0x01U, NULL, 0U);
-        }
+        (void)PICC_MethodResponse(PICC_APP_STORAGE, STM_METHOD_CONSISTENCY_CHECK,
+                                   sessionId, 0x01U, NULL, 0U);
     }
 
-    /* --- Method 0x02: A-core write to M-core --- */
+    /* --- Method 0x02: A-core write to M-core ---
+     * Note: Method 0x01 (Consistency Check) is handled exclusively in the
+     * WAIT_CONSISTENCY state. It is NOT processed here to avoid misinterpreting
+     * dataId=0x0000 (global consistency probe) as a lookup for a business
+     * data block with ID 0, which would always return NOT_OK. */
     if (PICC_GetMethodData(PICC_APP_STORAGE, STM_METHOD_A_WRITE,
                            s_methodBuf, sizeof(s_methodBuf), &methodLen,
                            &sessionId, NULL, NULL) == PICC_E_OK)
@@ -355,9 +328,9 @@ static void Stm_ProcessSyncToA(void)
             return;
         }
 
-        /* Check if A-core has responded to our sync request */
+        /* Check if A-core has responded to our sync request (precise sessionId matching) */
         if (PICC_GetResponseData(PICC_APP_STM_CLI, STM_METHOD_M_SYNC_TO_A,
-                                 0U, NULL, s_syncBuf, sizeof(s_syncBuf), &syncLen,
+                                 Stm_RetryState.sessionId, NULL, s_syncBuf, sizeof(s_syncBuf), &syncLen,
                                  NULL, NULL) == PICC_E_OK)
         {
             /* Response received from A-core - sync successful */
@@ -383,9 +356,9 @@ static void Stm_ProcessSyncToA(void)
             static uint8 s_txPayload[STM_NVM_BLOCK_MAX_SIZE + 2U];
             Stm_BuildSyncPayload(Stm_RetryState.dataId, s_syncBuf, syncLen,
                                    s_txPayload, &payloadLen);
-            (void)PICC_MethodRequest(PICC_APP_STM_CLI, STM_METHOD_M_SYNC_TO_A,
-                                     s_txPayload, payloadLen,
-                                     PICC_METHOD_WITH_RESPONSE);
+            Stm_RetryState.sessionId = PICC_MethodRequest(PICC_APP_STM_CLI, STM_METHOD_M_SYNC_TO_A,
+                                                           s_txPayload, payloadLen,
+                                                           PICC_METHOD_WITH_RESPONSE);
         }
         return;
     }
@@ -410,6 +383,7 @@ static void Stm_ProcessSyncToA(void)
         {
             /* Request sent successfully - set up retry state to track this sync */
             Stm_RetryState.dataId = syncDataId;
+            Stm_RetryState.sessionId = sessionId;
             Stm_RetryState.retryCount = 0U;
             Stm_RetryState.tickCounter = 0U;
             Stm_RetryState.active = 1U;
@@ -449,6 +423,7 @@ static void Stm_ProcessSyncToA(void)
 static void Stm_ProcessAppReadReq(void)
 {
     static uint8 s_readRspBuf[STM_NVM_BLOCK_MAX_SIZE + 4U]; /* static to avoid stack overflow */
+    uint16 rspLen;
 
     if (Stm_PendingReadReq.active == 0U)
     {
@@ -458,19 +433,42 @@ static void Stm_ProcessAppReadReq(void)
     /* Poll for response from A-core matching the pending request's session ID */
     if (PICC_GetResponseData(PICC_APP_STM_CLI, Stm_PendingReadReq.methodId,
                              Stm_PendingReadReq.sessionId, NULL,
-                             s_readRspBuf, sizeof(s_readRspBuf), NULL,
+                             s_readRspBuf, sizeof(s_readRspBuf), &rspLen,
                              NULL, NULL) == PICC_E_OK)
     {
-        /* Response received from A-core */
+        /* Response received from A-core - parse and write to local NVM */
         if (Stm_PendingReadReq.methodId == STM_METHOD_M_ASYNC_READ)
         {
             /* Method 0x05 response format: 2B dataId + 2B status + data
-             * TODO: Parse response and write data to local NVM if needed */
+             * Minimum valid payload: 4 bytes (2B dataId + 2B status) */
+            if ((rspLen >= 4U) && (s_readRspBuf[2] == 0x00U) && (s_readRspBuf[3] == 0x00U))
+            {
+                /* Status = 0x0000 (OK): write returned data to local NVM */
+                uint16 rspDataId = ((uint16)s_readRspBuf[0] << 8U) | (uint16)s_readRspBuf[1];
+                uint16 rspDataLen = rspLen - 4U;
+
+                if (rspDataLen > 0U)
+                {
+                    (void)StmNvm_WriteFromA(rspDataId, &s_readRspBuf[4], rspDataLen);
+                }
+            }
+            /* else: status != 0x0000 (NOT_OK) or payload too short - discard */
         }
         else
         {
             /* Method 0x03 response format: 2B dataId + data
-             * TODO: Parse response and write data to local NVM if needed */
+             * Minimum valid payload: 2 bytes (2B dataId) */
+            if (rspLen >= 2U)
+            {
+                uint16 rspDataId = ((uint16)s_readRspBuf[0] << 8U) | (uint16)s_readRspBuf[1];
+                uint16 rspDataLen = rspLen - 2U;
+
+                if (rspDataLen > 0U)
+                {
+                    (void)StmNvm_WriteFromA(rspDataId, &s_readRspBuf[2], rspDataLen);
+                }
+            }
+            /* else: payload too short - discard */
         }
 
         /* Mark request as completed - application can issue new requests */
@@ -550,7 +548,7 @@ void Stm_Init(void)
  *   RUNNING         -> WAIT_LINK        (link lost)
  *
  * In SYNC_TO_A and RUNNING states, the following sub-tasks run:
- *   - Stm_ProcessRxFromA():    Handle Method 0x01/0x02 from A-core
+ *   - Stm_ProcessRxFromA():    Handle Method 0x02 from A-core (0x01 handled in WAIT_CONSISTENCY)
  *   - Stm_ProcessSyncToA():    Sync dirty data to A-core (Method 0x04)
  *   - Stm_ProcessAppReadReq(): Handle responses for Method 0x03/0x05
  *   - Stm_CheckLinkState():    Monitor link health (RUNNING only)
@@ -577,13 +575,69 @@ void Stm_Main(void)
             break;
 
         case STM_STATE_WAIT_CONSISTENCY:
-            /* Wait for consistency check from A-core, or timeout.
-             * Currently: transition immediately to SYNC_TO_A.
-             * TODO: Implement consistency check wait logic with timeout */
-            Stm_State = STM_STATE_SYNC_TO_A;
+            /* Check link state FIRST - if link is lost while waiting for
+             * consistency check, immediately fall back to WAIT_LINK. */
+            Stm_CheckLinkState();
+            if (Stm_State != STM_STATE_WAIT_CONSISTENCY)
+            {
+                break;  /* Link lost, already transitioned to WAIT_LINK */
+            }
+
+            /* Poll for Method 0x01 (Consistency Check) from A-core.
+             * Protocol: A-core sends 2B dataId (must be 0x0000 for global
+             * consistency check). M-core replies with 4-byte success
+             * payload [0x00,0x00]+[0x00,0x00] (dataId + status=OK). */
+            {
+                static uint8 s_consReqBuf[4U]; /* static to avoid stack overflow */
+                uint16 consReqLen;
+                uint8 consSessionId;
+
+                if (PICC_GetMethodData(PICC_APP_STORAGE, STM_METHOD_CONSISTENCY_CHECK,
+                                       s_consReqBuf, sizeof(s_consReqBuf), &consReqLen,
+                                       &consSessionId, NULL, NULL) == PICC_E_OK)
+                {
+                    /* Validate: payload must be >= 2 bytes and dataId must be 0x0000 */
+                    if ((consReqLen >= 2U) &&
+                        (s_consReqBuf[0] == 0x00U) && (s_consReqBuf[1] == 0x00U))
+                    {
+                        /* Consistency check passed - reply with 4-byte success */
+                        static uint8 s_consRespBuf[4U];
+                        s_consRespBuf[0] = 0x00U;  /* dataId high byte */
+                        s_consRespBuf[1] = 0x00U;  /* dataId low byte */
+                        s_consRespBuf[2] = 0x00U;  /* status high byte */
+                        s_consRespBuf[3] = 0x00U;  /* status low byte: OK */
+                        (void)PICC_MethodResponse(PICC_APP_STORAGE, STM_METHOD_CONSISTENCY_CHECK,
+                                                   consSessionId, 0x00U, s_consRespBuf, 4U);
+
+                        /* Mark all valid NVM blocks as dirty to trigger full sync */
+                        StmNvm_SetAllValidDirty();
+
+                        /* Transition to SYNC_TO_A to begin data synchronization */
+                        Stm_State = STM_STATE_SYNC_TO_A;
+                    }
+                    else
+                    {
+                        /* Invalid consistency check request (dataId != 0x0000 or len < 2).
+                         * Reply with error so A-core knows M-core rejected it. */
+                        (void)PICC_MethodResponse(PICC_APP_STORAGE, STM_METHOD_CONSISTENCY_CHECK,
+                                                   consSessionId, 0x01U, NULL, 0U);
+                    }
+                }
+            }
             break;
 
         case STM_STATE_SYNC_TO_A:
+            /* Check link state FIRST - if link is lost during sync,
+             * immediately fall back to WAIT_LINK to avoid blind retries.
+             * Without this check, SYNC_TO_A would waste up to 4 stepped
+             * retries per dirty item before eventually reaching RUNNING
+             * and detecting the disconnect there. */
+            Stm_CheckLinkState();
+            if (Stm_State != STM_STATE_SYNC_TO_A)
+            {
+                break;  /* Link lost, already transitioned to WAIT_LINK */
+            }
+
             /* Sync all dirty NVM data to A-core before entering normal operation.
              * This ensures A-core has the latest M-core data after reconnection. */
             Stm_ProcessSyncToA();
@@ -611,7 +665,7 @@ void Stm_Main(void)
             /* Normal operation: all sub-tasks are active */
             Stm_ProcessRxFromA();      /* Handle A-core Method requests */
             Stm_ProcessSyncToA();       /* Sync any new dirty data */
-            Stm_ProcessAppReadReq();   /* too do Handle pending read responses */
+            Stm_ProcessAppReadReq();   /* TODO: Handle pending read responses */
 
             /* Check link state - transition to WAIT_LINK if either link is lost */
             Stm_CheckLinkState();

@@ -571,3 +571,27 @@ void StmNvm_ResetOnDisconnect(void)
         g_nvmBlocks[i].dirty = FALSE;
     }
 }
+
+/**
+ * Mark all valid NVM blocks as dirty for A-core sync.
+ *
+ * Called when A-core consistency check (Method 0x01 with dataId=0x0000)
+ * passes successfully. This triggers a full sync cycle where M-core will
+ * send all its current data to A-core via Method 0x04.
+ *
+ * Only blocks with valid==TRUE are marked dirty - invalid blocks have
+ * no data worth syncing. The dirty flag only exists in RAM mirror,
+ * no EEPROM write is needed here.
+ */
+void StmNvm_SetAllValidDirty(void)
+{
+    uint16 i;
+
+    for (i = 0U; i < STM_MAX_DATA_ITEMS; i++)
+    {
+        if (g_nvmBlocks[i].valid == TRUE)
+        {
+            g_nvmBlocks[i].dirty = TRUE;
+        }
+    }
+}
