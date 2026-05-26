@@ -409,8 +409,9 @@ Std_ReturnType StmNvm_Write(uint16 dataId, const uint8 *data, uint16 len)
         return E_NOT_OK;
     }
 
-    /* EEPROM write succeeded - clear dirty flag (data is persisted) */
-    g_nvmBlocks[idx].dirty = FALSE;
+    /* EEPROM write succeeded. Dirty flag stays TRUE because data
+     * still needs to be synced to A-core via Method 0x04.
+     * It will be cleared by StmNvm_ClearDirty() after A-core confirms. */
     return E_OK;
 }
 
@@ -475,8 +476,17 @@ Std_ReturnType StmNvm_GetSyncableItem(uint16 startIndex, uint16 *outDataId,
 
 Std_ReturnType StmNvm_WriteFromA(uint16 dataId, const uint8 *data, uint16 len)
 {
-    /* Delegate to StmNvm_Write - same logic for local and remote writes */
-    return StmNvm_Write(dataId, data, len);
+    Std_ReturnType ret;
+
+    /* Delegate to StmNvm_Write for RAM mirror + EEPROM persistence */
+    ret = StmNvm_Write(dataId, data, len);
+    if (ret == E_OK)
+    {
+        /* Data received FROM A-core does NOT need to be synced BACK to A-core.
+         * Clear dirty immediately to prevent unnecessary Method 0x04 round-trip. */
+        StmNvm_ClearDirty(dataId);
+    }
+    return ret;
 }
 
 /**
