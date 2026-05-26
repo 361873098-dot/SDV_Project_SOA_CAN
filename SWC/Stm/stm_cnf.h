@@ -160,6 +160,17 @@ extern const Stm_DataItemCfg_t g_StmDataItemCfg[STM_MAX_DATA_ITEMS];
 /** Retry interval table in 10ms ticks (defined in stm_cnf.c) */
 extern const uint16 g_StmRetryIntervals[STM_RETRY_INTERVAL_COUNT];
 
+/***********************************************************************************************************************
+ *  TRACE32 Debug Test Variables & Interface
+ ***********************************************************************************************************************/
+extern volatile uint8 NVM_test_flag;
+extern uint8 NVM_test_write_val;
+extern uint8 NVM_test_read_buf[16];
+extern uint16 NVM_test_read_len;
+extern Std_ReturnType NVM_test_result;
+
+extern void Stm_ProcessTest(void);
+
 #if defined(__cplusplus)
 }
 #endif

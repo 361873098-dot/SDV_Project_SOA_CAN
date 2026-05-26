@@ -122,7 +122,7 @@ STM 基于底层高优先级 IPCF 通道 1，在逻辑上注册了 Provider 和 
     *   作为 **Client** (42 端口)，M 核启动后或检测到断开时，会以 10ms 为周期主动向 A 核发送 `LINK_AVAILABLE` 连接请求，直到 A 核返回同意响应（ReturnCode = 0x00）。
     *   **严格双通关口**：STM 业务层代码会在主任务中强制校验两个端点链路。只有当两个逻辑通道同时处于 `PICC_LINK_STATE_CONNECTED` 时，STM 才会进入后续的一致性检查和数据同步状态，任何单向连接都无法启动业务。
 2.  **双向心跳监控 (Heartbeat)**：
-    *   在双通道建立后，无论当前是否存在业务读写，M 核与 A 核的通信组件均以 **2 秒** 为固定周期，在 Channel 1 的两个端口上同时双向发送和接收特殊的 `Ping/Pong` 探针（Ping: `ff 00 ff 00 ff 00 00 01 00`，Pong: `ff 00 ff 00 ff 00 00 01 01`）。
+    *   在双通道建立后，无论当前是否存在业务读写，M 核与 A 核的通信组件均以 **2 秒** 为固定周期，在 Channel 1 的两个端口上同时双向发送和接收特殊的 `Ping/Pong` 心跳报文（Ping: `ff 00 ff 00 ff 00 00 01 00`，Pong: `ff 00 ff 00 ff 00 00 01 01`）。
     *   若任一逻辑端口连续 3 次未收到 Pong 应答，判定为该介质中断，触发链路断开重置流（ResetOnDisconnect）。
 3.  **多包堆叠发送与数据完整性校验 (CRC16)**：
     *   为提高 IPCF 通信的吞吐量，M 核发送和接收的报文均为**堆叠报文**，支持将多个 Event/Method 业务包合并拼接发送。
@@ -175,7 +175,7 @@ STM 基于底层高优先级 IPCF 通道 1，在逻辑上注册了 Provider 和 
 | `WAIT_LINK`        | 初始化后或链路断开后 | 无（PICC 自动处理链路请求）                    | Provider + Consumer 链路均连接成功 $\rightarrow$ `WAIT_CONSISTENCY`       |
 | `WAIT_CONSISTENCY` | 链路建立             | 链路活性监测 + 轮询 Method 0x01 请求           | 收到 A 核 0x01 请求且 payload 为 `0x0000` $\rightarrow$ 回应 0x0000 成功，将本地有效块全部置脏，跳转至 `SYNC_TO_A` |
 | `SYNC_TO_A`        | 一致性检查通过       | 链路活性监测 + `Stm_ProcessSyncToA()` (0x04)   | 所有脏数据（0x04）均发送完毕且当前无在途重试 $\rightarrow$ `RUNNING`      |
-| `RUNNING`          | 所有数据已同步       | 链路活性监测 + 4 个子任务全部活跃              | 链路断连（探针超时或断开包） $\rightarrow$ `WAIT_LINK`                    |
+| `RUNNING`          | 所有数据已同步       | 链路活性监测 + 4 个子任务全部活跃              | 链路断开（心跳检测超时或收到断开连接通知） $\rightarrow$ `WAIT_LINK`      |
 
 ### 3.3 断开连接时的状态重置
 

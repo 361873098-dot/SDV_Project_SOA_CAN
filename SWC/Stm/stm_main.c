@@ -675,6 +675,9 @@ void Stm_Main(void)
             /* Invalid state - should never happen */
             break;
     }
+
+    /* Process TRACE32 interactive debug test command (if NVM_test_flag != 0) */
+    Stm_ProcessTest();
 }
 
 /**
