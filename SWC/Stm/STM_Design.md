@@ -1,67 +1,67 @@
-# STM (Storage Middleware) — Software Design Document
+# STM（存储中间件）— 软件设计文档
 
-> **Module**: STM (Storage Middleware)  
-> **Version**: 1.0  
-> **Date**: 2026/05/25  
-> **Author**: Li Song (uic59152)  
-> **Target**: S32G399A M7 Core + FreeRTOS  
+> **模块**：STM（Storage Middleware，存储中间件）
+> **版本**：1.1
+> **日期**：2026/05/26
+> **作者**：Li Song (uic59152)
+> **目标平台**：S32G399A M7 核 + FreeRTOS
 
 ---
 
-## 1. Overview
+## 1. 概述
 
-### 1.1 Purpose
+### 1.1 目的
 
-STM provides **non-volatile data management** and **M↔A core data synchronization** for the S32G3 M-core. It bridges the gap between:
+STM 为 S32G3 M 核提供**非易失性数据管理**和 **M↔A 核数据同步**功能。它桥接了以下两个领域：
 
-- **Local persistence** — Data stored in EEPROM with a RAM mirror for zero-latency reads
-- **Cross-core sync** — Data changes are automatically propagated to/from A-core via PICC (IPCF shared memory)
+- **本地持久化** — 数据存储在 EEPROM 中，同时维护 RAM 镜像以实现零延迟读取
+- **跨核同步** — 数据变更通过 PICC（IPCF 共享内存）自动在 M 核与 A 核之间传播
 
-### 1.2 Key Characteristics
+### 1.2 关键特性
 
-| Property | Value |
-|----------|-------|
-| Task period | 10ms (called in `TASK_M0_10MS`) |
-| Transport | IPCF Channel 1 (HP) via PICC middleware |
-| PICC roles | Dual: **Provider (Server)** + **Consumer (Client)** |
-| Persistence | I2C EEPROM with segmented writes (≤16B/transfer) |
-| Max data items | 5 |
-| Max total EEPROM data | 64 bytes |
-| Retry support | Method 0x04 only (4 retries, stepped intervals) |
+| 属性 | 值 |
+|------|------|
+| 任务周期 | 10ms（在 `TASK_M0_10MS` 中调用） |
+| 传输通道 | IPCF 通道 1（高优先级），通过 PICC 中间件 |
+| PICC 角色 | 双角色：**Provider（服务端）** + **Consumer（客户端）** |
+| 持久化 | I2C EEPROM，分段写入（≤16 字节/次传输） |
+| 最大数据项数 | 5 |
+| EEPROM 数据总量上限 | 64 字节 |
+| 重试支持 | 仅 Method 0x04（4 次重试，阶梯间隔） |
 
-### 1.3 File Structure
+### 1.3 文件结构
 
 ```
 SWC/Stm/
-├── stm.h            — Public API (Stm_Init, Stm_Main, Stm_WriteLocal, Stm_ReadLocal, Stm_RequestReadFromA)
-├── stm.c            — Core logic: state machine + 5 sub-task handlers + PICC interaction
-├── stm_cnf.h        — Configuration header: PICC IDs, Method IDs, NVM params, state machine enum
-├── stm_cnf.c        — Configuration instances: data item table, retry interval table
-├── stm_nvm.h        — NVM management interface
-└── stm_nvm.c        — NVM implementation: EEPROM read/write, RAM mirror, segmented I2C
+├── stm.h            — 公共 API（Stm_Init, Stm_Main, Stm_WriteLocal, Stm_ReadLocal, Stm_RequestReadFromA）
+├── stm.c            — 核心逻辑：状态机 + 5 个子任务处理器 + PICC 交互
+├── stm_cnf.h        — 配置头文件：PICC ID、Method ID、NVM 参数、状态机枚举
+├── stm_cnf.c        — 配置实例：数据项表、重试间隔表
+├── stm_nvm.h        — NVM 管理接口
+└── stm_nvm.c        — NVM 实现：EEPROM 读写、RAM 镜像、I2C 分段传输
 ```
 
 ---
 
-## 2. Architecture
+## 2. 架构
 
-### 2.1 Layer Diagram
+### 2.1 分层图
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                   Application (SWC)                 │
+│                   应用层 (SWC)                       │
 │  Stm_WriteLocal() / Stm_ReadLocal() /              │
 │  Stm_RequestReadFromA()                            │
 └──────────────┬──────────────────────┬───────────────┘
                │                      │
 ┌──────────────▼──────────┐  ┌────────▼──────────────┐
-│     stm.c (Core)        │  │   stm_nvm.c (NVM)     │
+│     stm.c (核心层)       │  │   stm_nvm.c (NVM 层)  │
 │  ┌───────────────────┐  │  │  ┌─────────────────┐ │
-│  │  State Machine    │  │  │  │  RAM Mirror      │ │
-│  │  (5 states)       │  │  │  │  g_nvmBlocks[]  │ │
+│  │  状态机            │  │  │  │  RAM 镜像       │ │
+│  │  (5 个状态)        │  │  │  │  g_nvmBlocks[]  │ │
 │  ├───────────────────┤  │  │  ├─────────────────┤ │
-│  │  Sub-tasks:       │  │  │  │  EEPROM I/O     │ │
-│  │  - CheckLink      │  │  │  │  (segmented)    │ │
+│  │  子任务:           │  │  │  │  EEPROM I/O     │ │
+│  │  - CheckLink      │  │  │  │  (分段传输)      │ │
 │  │  - ProcessRxFromA │  │  │  └─────────────────┘ │
 │  │  - ProcessSyncToA │  │  └───────────────────────┘
 │  │  - ProcessAppRead │  │
@@ -69,27 +69,27 @@ SWC/Stm/
 └──────────────┬──────────┘
                │
 ┌──────────────▼──────────┐
-│   PICC Middleware       │
-│   (IPCF Channel 1)      │
+│   PICC 中间件            │
+│   (IPCF 通道 1)          │
 └─────────────────────────┘
 ```
 
-### 2.2 Dual-Role PICC Registration
+### 2.2 双角色 PICC 注册
 
-STM registers **two** PICC endpoints on Channel 1:
+STM 在通道 1 上注册**两个** PICC 端点：
 
-| Role | PICC App Index | localId | remoteId | Purpose |
-|------|---------------|---------|----------|---------|
-| **Provider (Server)** | `PICC_APP_STORAGE` | 41 (0x29) | 47 (0x2F) | Receive Method 0x01/0x02 from A-core |
-| **Consumer (Client)** | `PICC_APP_STM_CLI` | 42 (0x2A) | 46 (0x2E) | Send Method 0x03/0x04/0x05 to A-core |
+| 角色 | PICC App 索引 | localId | remoteId | 用途 |
+|------|---------------|---------|----------|------|
+| **Provider（服务端）** | `PICC_APP_STORAGE` | 41 (0x29) | 47 (0x2F) | 接收来自 A 核的 Method 0x01/0x02 |
+| **Consumer（客户端）** | `PICC_APP_STM_CLI` | 42 (0x2A) | 46 (0x2E) | 向 A 核发送 Method 0x03/0x04/0x05 |
 
-Both links must be connected before STM can operate (state `WAIT_LINK` → `WAIT_CONSISTENCY`).
+两个链路都必须连接成功后 STM 才能运行（状态 `WAIT_LINK` → `WAIT_CONSISTENCY`）。
 
 ---
 
-## 3. State Machine
+## 3. 状态机
 
-### 3.1 State Transition Diagram
+### 3.1 状态转换图
 
 ```
                     Stm_Init()
@@ -100,10 +100,10 @@ Both links must be connected before STM can operate (state `WAIT_LINK` → `WAIT
                 └───────┬───────┘
                         │
                         ▼
-                ┌───────────────┐    link lost
+                ┌───────────────┐    链路断开
                 │  WAIT_LINK    │◄──────────────────────────┐
                 └───────┬───────┘                            │
-                        │ both links connected               │
+                        │ 两个链路均连接成功                    │
                         ▼                                    │
                 ┌───────────────┐                            │
                 │WAIT_CONSISTENCY│                           │
@@ -112,470 +112,479 @@ Both links must be connected before STM can operate (state `WAIT_LINK` → `WAIT
                         │                                    │
                         ▼                                    │
                 ┌───────────────┐                            │
-                │  SYNC_TO_A    │──── link lost ─────────────┤
+                │  SYNC_TO_A    │──── 链路断开 ──────────────┤
                 └───────┬───────┘                            │
-                        │ all dirty data synced              │
+                        │ 所有脏数据同步完成                    │
                         ▼                                    │
                 ┌───────────────┐                            │
-                │  RUNNING      │──── link lost ─────────────┘
+                │  RUNNING      │──── 链路断开 ──────────────┘
                 └───────────────┘
 ```
 
-### 3.2 State Descriptions
+### 3.2 状态说明
 
-| State | Entry Condition | Active Sub-tasks | Exit Condition |
-|-------|----------------|-----------------|----------------|
-| `UNINIT` | Power-on default | None | `Stm_Init()` called → `WAIT_LINK` |
-| `WAIT_LINK` | After init or link lost | None (PICC auto-handles link requests) | Both Provider + Consumer links connected → `WAIT_CONSISTENCY` |
-| `WAIT_CONSISTENCY` | Links established | None (currently immediate transition) | TODO: wait for A-core consistency check → `SYNC_TO_A` |
-| `SYNC_TO_A` | Consistency passed | `Stm_ProcessSyncToA()`, `Stm_ProcessRxFromA()` | No more dirty blocks + no retry in progress → `RUNNING` |
-| `RUNNING` | All data synced | All 4 sub-tasks active | Link lost → `WAIT_LINK` |
+| 状态 | 进入条件 | 活跃子任务 | 退出条件 |
+|------|----------|-----------|----------|
+| `UNINIT` | 上电默认 | 无 | 调用 `Stm_Init()` → `WAIT_LINK` |
+| `WAIT_LINK` | 初始化后或链路断开后 | 无（PICC 自动处理链路请求） | Provider + Consumer 链路均连接成功 → `WAIT_CONSISTENCY` |
+| `WAIT_CONSISTENCY` | 链路建立 | `Stm_ProcessRxFromA()`（当前立即跳转） | 当前直接跳转 → `SYNC_TO_A`；TODO：实现基于超时的 A 核 0x01 一致性检查等待 |
+| `SYNC_TO_A` | 一致性检查通过 | `Stm_ProcessSyncToA()`, `Stm_ProcessRxFromA()` | 无更多脏块 + 无正在进行的重试 → `RUNNING` |
+| `RUNNING` | 所有数据已同步 | 4 个子任务全部活跃 | 链路断开 → `WAIT_LINK` |
 
-### 3.3 State Reset on Disconnect
+### 3.3 断开连接时的状态重置
 
-When either PICC link is lost, the following reset actions are taken:
+当任一 PICC 链路断开时，执行以下重置操作：
 
-| Item | Action | Rationale |
-|------|--------|-----------|
-| State | → `WAIT_LINK` | Must re-establish link before any operation |
-| `Stm_SessionId` | Reset to 0 | Per protocol: session IDs reset on disconnect |
-| `Stm_RetryState.active` | Cleared | Cancel in-flight sync |
-| `Stm_PendingReadReq.active` | Cleared | Cancel pending read request |
-| `Stm_SyncScanIndex` | Reset to 0 | Restart round-robin scan |
-| NVM dirty flags | **Cleared** | Pending syncs abandoned; data preserved in RAM/EEPROM |
-| NVM data (RAM/EEPROM) | **Preserved** | Data remains valid locally |
-| CRC/send counter | **Not reset** | Handled by PICC layer, persists across disconnects |
-
----
-
-## 4. Method Protocol
-
-### 4.1 Method Overview
-
-| Method ID | Name | Direction | PICC Role | Retry | Description |
-|-----------|------|-----------|-----------|-------|-------------|
-| 0x01 | Consistency Check | A→M | Server | No | A-core asks M-core to verify/send local data |
-| 0x02 | A-core Write | A→M | Server | No | A-core pushes data to M-core NVM |
-| 0x03 | M-core Read from A | M→A | Client | No | M-core reads data from A-core (sync) |
-| 0x04 | M-core Sync to A | M→A | Client | **Yes** (4 retries) | M-core pushes dirty data to A-core |
-| 0x05 | M-core Async Read from A | M→A | Client | No | M-core reads data from A-core (async) |
-
-### 4.2 Method 0x01 — Consistency Check (A→M)
-
-```
-Request from A-core:
-  Payload: [dataId_H][dataId_L]
-  Length: 2 bytes
-
-Response from M-core:
-  Payload: [dataId_H][dataId_L][status_H][status_H][data...]
-  Length: 4 + dataLen bytes
-  ReturnCode: 0x00 (OK) or 0x01 (NOT_OK)
-
-  Status values:
-    0x0000 = OK (data found and returned)
-    0x0001 = NOT_OK (dataId not found or block invalid)
-```
-
-### 4.3 Method 0x02 — A-core Write to M-core (A→M)
-
-```
-Request from A-core:
-  Payload: [dataId_H][dataId_L][data...]
-  Length: 2 + dataLen bytes
-
-Response from M-core:
-  Payload: [dataId_H][dataId_L][status_H][status_L]
-  Length: 4 bytes
-  ReturnCode: 0x00 (OK) or 0x01 (NOT_OK)
-
-  Status values:
-    0x0000 = OK (data written to NVM)
-    0x0001 = NOT_OK (invalid dataId, length mismatch, or EEPROM failure)
-```
-
-### 4.4 Method 0x04 — M-core Sync to A (M→A, with retry)
-
-```
-Request from M-core:
-  Payload: [dataId_H][dataId_L][data...]
-  Length: 2 + dataLen bytes
-  PICC MethodType: PICC_METHOD_WITH_RESPONSE
-
-Response from A-core:
-  (Application-specific; M-core only checks that a response was received)
-
-Retry Logic:
-  - Only one 0x04 sync can be in-flight at a time
-  - Stepped retry intervals: 100ms → 200ms → 400ms → 800ms
-  - Max 4 retries before giving up (clearing dirty flag)
-  - Anti-storm: max 2 sync messages per 10ms cycle
-```
-
-### 4.5 Method 0x05 — M-core Async Read from A (M→A, no retry)
-
-```
-Request from M-core:
-  Payload: [dataId_H][dataId_L][0x00][0x00]
-  Length: 4 bytes (2B dataId + 2B reserved)
-  PICC MethodType: PICC_METHOD_WITH_RESPONSE
-
-Response from A-core:
-  (Handled in Stm_ProcessAppReadReq, matched by sessionId)
-
-Constraints:
-  - Only one read request can be pending at a time
-  - No retry on failure or timeout
-  - Must be in RUNNING state
-```
+| 项目 | 操作 | 原因 |
+|------|------|------|
+| 状态 | → `WAIT_LINK` | 必须重新建立链路后才能操作 |
+| `Stm_SessionId` | 重置为 0 | 按协议要求：断开连接时 session ID 重置 |
+| `Stm_RetryState.active` | 清除 | 取消正在进行的同步 |
+| `Stm_PendingReadReq.active` | 清除 | 取消挂起的读取请求 |
+| `Stm_SyncScanIndex` | 重置为 0 | 重新开始轮询扫描 |
+| NVM dirty 标志 | **清除** | 放弃待同步数据；RAM/EEPROM 中的数据保留 |
+| NVM 数据（RAM/EEPROM） | **保留** | 数据在本地仍然有效 |
+| CRC/发送计数器 | **不重置** | 由 PICC 层管理，断开连接后保持 |
 
 ---
 
-## 5. NVM Layer Design
+## 4. Method 协议
 
-### 5.1 Memory Architecture
+### 4.1 Method 总览
+
+| Method ID | 名称 | 方向 | PICC 角色 | 重试 | 描述 |
+|-----------|------|------|-----------|------|------|
+| 0x01 | 一致性检查 | A→M | 服务端 | 否 | A 核请求 M 核验证/发送本地数据 |
+| 0x02 | A 核写入 | A→M | 服务端 | 否 | A 核向 M 核 NVM 推送数据 |
+| 0x03 | M 核从 A 核读取 | M→A | 客户端 | 否 | M 核从 A 核读取数据（同步） |
+| 0x04 | M 核同步到 A 核 | M→A | 客户端 | **是**（4 次重试） | M 核向 A 核推送脏数据 |
+| 0x05 | M 核异步从 A 核读取 | M→A | 客户端 | 否 | M 核从 A 核读取数据（异步） |
+
+### 4.2 Method 0x01 — 一致性检查（A→M）
+
+```
+来自 A 核的请求：
+  Payload：[dataId_H][dataId_L]
+  长度：2 字节
+
+来自 M 核的响应：
+  Payload：[dataId_H][dataId_L][status_H][status_H][data...]
+  长度：4 + dataLen 字节
+  ReturnCode：0x00（OK）或 0x01（NOT_OK）
+
+  状态值：
+    0x0000 = OK（找到数据并返回）
+    0x0001 = NOT_OK（dataId 未找到或块无效）
+```
+
+### 4.3 Method 0x02 — A 核写入 M 核（A→M）
+
+```
+来自 A 核的请求：
+  Payload：[dataId_H][dataId_L][data...]
+  长度：2 + dataLen 字节
+
+来自 M 核的响应：
+  Payload：[dataId_H][dataId_L][status_H][status_L]
+  长度：4 字节
+  ReturnCode：0x00（OK）或 0x01（NOT_OK）
+
+  状态值：
+    0x0000 = OK（数据已写入 NVM）
+    0x0001 = NOT_OK（dataId 无效、长度不匹配或 EEPROM 故障）
+```
+
+### 4.4 Method 0x04 — M 核同步到 A 核（M→A，带重试）
+
+```
+来自 M 核的请求：
+  Payload：[dataId_H][dataId_L][data...]
+  长度：2 + dataLen 字节
+  PICC MethodType：PICC_METHOD_WITH_RESPONSE
+
+来自 A 核的响应：
+  （应用层自定义；M 核仅检查是否收到了 RESPONSE）
+  - M 核不检查响应中的 ReturnCode
+  - M 核不解析响应 Payload 内容
+  - 任何 RESPONSE（MessageType=0x80）都被视为成功
+
+脏标志（dirty）生命周期：
+  - StmNvm_Write() 设置 dirty=TRUE，即使 EEPROM 写入成功也保持 TRUE
+  - dirty 仅在 A 核确认接收后由 StmNvm_ClearDirty() 清除
+  - 断开连接时：dirty 标志被清除（放弃待同步数据）
+
+重试逻辑：
+  - 同一时间只能有一个 0x04 同步请求在途
+  - 阶梯重试间隔：100ms → 200ms → 400ms → 800ms
+  - 最多 4 次重试，超限后放弃（清除 dirty 标志）
+  - 防风暴：每个 10ms 周期最多发送 2 条同步消息
+```
+
+### 4.5 Method 0x05 — M 核异步从 A 核读取（M→A，无重试）
+
+```
+来自 M 核的请求：
+  Payload：[dataId_H][dataId_L][0x00][0x00]
+  长度：4 字节（2 字节 dataId + 2 字节保留）
+  PICC MethodType：PICC_METHOD_WITH_RESPONSE
+
+来自 A 核的响应：
+  （在 Stm_ProcessAppReadReq 中处理，通过 sessionId 匹配）
+
+约束条件：
+  - 同一时间只能有一个读取请求在途
+  - 失败或超时不会重试
+  - 必须处于 RUNNING 状态
+```
+
+---
+
+## 5. NVM 层设计
+
+### 5.1 存储架构
 
 ```
 ┌─────────────────────────────────────────────┐
-│              RAM Mirror (g_nvmBlocks[])      │
+│              RAM 镜像 (g_nvmBlocks[])         │
 │                                             │
-│  Block 0: [data(64B)][dataLen][valid][dirty][eepromOffset] │
-│  Block 1: [data(64B)][dataLen][valid][dirty][eepromOffset] │
-│  Block 2: [data(64B)][dataLen][valid][dirty][eepromOffset] │
-│  Block 3: [data(64B)][dataLen][valid][dirty][eepromOffset] │
-│  Block 4: [data(64B)][dataLen][valid][dirty][eepromOffset] │
+│  块 0：[data(64B)][dataLen][valid][dirty][eepromOffset] │
+│  块 1：[data(64B)][dataLen][valid][dirty][eepromOffset] │
+│  块 2：[data(64B)][dataLen][valid][dirty][eepromOffset] │
+│  块 3：[data(64B)][dataLen][valid][dirty][eepromOffset] │
+│  块 4：[data(64B)][dataLen][valid][dirty][eepromOffset] │
 │                                             │
-│  Read path:  Direct from RAM (zero latency) │
-│  Write path: RAM mirror → EEPROM (immediate)│
+│  读取路径：直接从 RAM 读取（零延迟）           │
+│  写入路径：RAM 镜像 → EEPROM（立即）          │
 └──────────────────┬──────────────────────────┘
-                   │ I2C (segmented, ≤16B/transfer)
+                   │ I2C（分段传输，≤16B/次）
                    ▼
 ┌─────────────────────────────────────────────┐
-│              I2C EEPROM                    │
+│              I2C EEPROM                      │
 │                                             │
-│  Addr 0x10: [magic = 0xA5]                 │
-│  Addr 0x11: [valid][len][data...]  Block 0 │
-│  Addr 0x1B: [valid][len][data...]  Block 1 │
-│  Addr 0x2D: [valid][len][data...]  Block 2 │
-│  Addr 0x33: [valid][len][data...]  Block 3 │
-│  Addr 0x41: [valid][len][data...]  Block 4 │
-│  Addr 0x50: ──── END ────                  │
+│  地址 0x10：[magic = 0xA5]                  │
+│  地址 0x11：[valid][len][data...]  块 0      │
+│  地址 0x1B：[valid][len][data...]  块 1      │
+│  地址 0x2D：[valid][len][data...]  块 2      │
+│  地址 0x33：[valid][len][data...]  块 3      │
+│  地址 0x41：[valid][len][data...]  块 4      │
+│  地址 0x50：──── END ────                    │
 └─────────────────────────────────────────────┘
 ```
 
-### 5.2 EEPROM Block Format
+### 5.2 EEPROM 块格式
 
-Each data block stored in EEPROM has the following format:
+每个数据块在 EEPROM 中的存储格式如下：
 
 ```
-Offset   Field    Size   Description
+偏移     字段     大小   描述
 ─────    ─────    ────   ───────────
-+0       valid    1B     TRUE(1) if block has valid data, FALSE(0) if empty
-+1       len      1B     Actual data length (0..maxDataLen)
-+2       data     NB     Persistent data bytes (N = maxDataLen from config)
++0       valid    1B     TRUE(1) 表示块中有有效数据，FALSE(0) 表示空
++1       len      1B     实际数据长度（0..maxDataLen）
++2       data     NB     持久化数据字节（N = 配置中的 maxDataLen）
 
-Total per block = 2 + maxDataLen bytes
+每块总计 = 2 + maxDataLen 字节
 ```
 
-### 5.3 EEPROM Address Map
+### 5.3 EEPROM 地址映射
 
-| EEPROM Address | Content | Size |
-|---------------|---------|------|
-| `0x10` | Magic byte (0xA5) | 1B |
-| `0x11` ~ `0x50` | Data area (5 blocks) | 64B |
+| EEPROM 地址 | 内容 | 大小 |
+|------------|------|------|
+| `0x10` | Magic 字节 (0xA5) | 1B |
+| `0x11` ~ `0x50` | 数据区（5 个块） | 64B |
 
-### 5.4 Data Item Configuration
+### 5.4 数据项配置
 
-Current configuration (5 items, total 58B ≤ 64B):
+当前配置（5 个数据项，总计 58B ≤ 64B）：
 
-| Index | dataId | maxDataLen | EEPROM Size | Example Usage |
-|-------|--------|-----------|-------------|---------------|
-| 0 | 0x0001 | 8 | 2+8=10 | Calibration data |
-| 1 | 0x0002 | 16 | 2+16=18 | Config block |
-| 2 | 0x0003 | 4 | 2+4=6 | Status flags |
-| 3 | 0x0004 | 12 | 2+12=14 | Sensor offsets |
-| 4 | 0x0005 | 8 | 2+8=10 | Runtime params |
-| | | **Total** | **58** | |
+| 索引 | dataId | maxDataLen | EEPROM 大小 | 示例用途 |
+|------|--------|-----------|-------------|----------|
+| 0 | 0x0001 | 8 | 2+8=10 | 标定数据 |
+| 1 | 0x0002 | 16 | 2+16=18 | 配置块 |
+| 2 | 0x0003 | 4 | 2+4=6 | 状态标志 |
+| 3 | 0x0004 | 12 | 2+12=14 | 传感器偏移 |
+| 4 | 0x0005 | 8 | 2+8=10 | 运行时参数 |
+| | | **合计** | **58** | |
 
-### 5.5 Init Flow
+### 5.5 初始化流程
 
 ```
 StmNvm_Init()
      │
-     ├─ memset(g_nvmBlocks, 0)          ← Clear all RAM mirror blocks
+     ├─ memset(g_nvmBlocks, 0)          ← 清除所有 RAM 镜像块
      │
-     ├─ StmNvm_ComputeOffsets()          ← Assign EEPROM offsets from config
+     ├─ StmNvm_ComputeOffsets()          ← 根据配置分配 EEPROM 偏移
      │
-     ├─ Eeprom_ReadBytes(0x10, &magic)   ← Read magic byte
+     ├─ Eeprom_ReadBytes(0x10, &magic)   ← 读取 magic 字节
      │
-     ├── magic != 0xA5 ?                 ← First boot or corrupted?
+     ├── magic != 0xA5 ?                 ← 首次开机或 EEPROM 损坏？
      │    │
-     │    └─ YES → StmNvm_FormatEeprom() ← Write magic + clear all blocks
+     │    └─ 是 → StmNvm_FormatEeprom()  ← 写入 magic + 清除所有块
      │
-     └── magic == 0xA5                   ← EEPROM is valid
+     └── magic == 0xA5                   ← EEPROM 有效
           │
-          └─ For each block: StmNvm_ReadBlockFromEeprom()
-                              ├─ Read [valid][len] header (2B)
-                              ├─ Validate len ≤ maxDataLen
-                              └─ If valid && len > 0: read data
+          └─ 逐块执行：StmNvm_ReadBlockFromEeprom()
+                        ├─ 读取 [valid][len] 头部（2B）
+                        ├─ 校验 len ≤ maxDataLen
+                        └─ 如果 valid 且 len > 0：读取数据
 ```
 
-### 5.6 Write Path (Local or from A-core)
+### 5.6 写入路径（本地写入或来自 A 核）
 
 ```
 StmNvm_Write() / StmNvm_WriteFromA()
      │
-     ├─ Validate: NVM ready, data != NULL, len ≤ maxDataLen
+     ├─ 校验：NVM 就绪、data != NULL、len ≤ maxDataLen
      │
-     ├─ memcpy(data) to RAM mirror         ← Immediate update
-     ├─ Set valid=TRUE, dirty=TRUE         ← Mark for A-core sync
+     ├─ memcpy(data) 到 RAM 镜像          ← 立即更新
+     ├─ 设置 valid=TRUE, dirty=TRUE       ← 标记为待同步给 A 核
      │
-     ├─ StmNvm_WriteBlockToEeprom()        ← Persist to EEPROM
-     │    ├─ Write [valid][len] header (2B)
-     │    └─ Write data in segments ≤ 16B   ← I2C transaction size limit
+     ├─ StmNvm_WriteBlockToEeprom()       ← 持久化到 EEPROM
+     │    ├─ 写入 [valid][len] 头部（2B）
+     │    └─ 以 ≤16B 分段写入数据          ← I2C 事务大小限制
      │
-     └─ If EEPROM OK: dirty=FALSE          ← Data persisted, clear dirty
+     └─ EEPROM 成功：dirty 保持 TRUE      ← 数据已在本地持久化，但仍需同步给 A 核
+                                             ← dirty 仅在 A 核确认接收后由 StmNvm_ClearDirty() 清除
 ```
 
-### 5.7 Read Path (Local)
+### 5.7 读取路径（本地读取）
 
 ```
 StmNvm_Read()
      │
-     ├─ Validate: NVM ready, data != NULL, block valid
+     ├─ 校验：NVM 就绪、data != NULL、块有效
      │
-     └─ memcpy from RAM mirror             ← Zero latency (no EEPROM access)
+     └─ 从 RAM 镜像 memcpy               ← 零延迟（无需访问 EEPROM）
 ```
 
 ---
 
-## 6. Sub-task Design
+## 6. 子任务设计
 
-### 6.1 Sub-task Execution Matrix
+### 6.1 子任务执行矩阵
 
-| Sub-task | SYNC_TO_A | RUNNING | Period | Description |
-|----------|-----------|---------|--------|-------------|
-| `Stm_CheckLinkState()` | — | ✅ | 10ms | Monitor both PICC links |
-| `Stm_ProcessRxFromA()` | ✅ | ✅ | 10ms | Handle Method 0x01/0x02 |
-| `Stm_ProcessSyncToA()` | ✅ | ✅ | 10ms | Sync dirty data via Method 0x04 |
-| `Stm_ProcessAppReadReq()` | — | ✅ | 10ms | Handle Method 0x03/0x05 responses |
+| 子任务 | SYNC_TO_A | RUNNING | 周期 | 描述 |
+|--------|-----------|---------|------|------|
+| `Stm_CheckLinkState()` | — | ✅ | 10ms | 监控两个 PICC 链路 |
+| `Stm_ProcessRxFromA()` | ✅ | ✅ | 10ms | 处理 Method 0x01/0x02 |
+| `Stm_ProcessSyncToA()` | ✅ | ✅ | 10ms | 通过 Method 0x04 同步脏数据 |
+| `Stm_ProcessAppReadReq()` | — | ✅ | 10ms | 处理 Method 0x03/0x05 响应 |
 
-### 6.2 Stm_ProcessSyncToA — Retry Flow
+### 6.2 Stm_ProcessSyncToA — 重试流程
 
 ```
 Stm_ProcessSyncToA()
      │
-     ├── Retry in progress (Stm_RetryState.active)?
+     ├── 有正在进行的重试（Stm_RetryState.active）？
      │    │
-     │    ├── retryCount ≥ 4? → ClearDirty, stop retry
+     │    ├── retryCount ≥ 4？ → ClearDirty，停止重试
      │    │
-     │    ├── Response received? → ClearDirty, stop retry
+     │    ├── 收到响应？ → ClearDirty，停止重试
      │    │
-     │    ├── tickCounter < interval[retryCount]? → Wait
+     │    ├── tickCounter < interval[retryCount]？ → 等待
      │    │
-     │    └── Interval elapsed? → Re-send, retryCount++
+     │    └── 间隔时间到？ → 重新发送，retryCount++
      │
-     ├── Anti-storm: syncCount ≥ 2? → Skip this cycle
+     ├── 防风暴：syncCount ≥ 2？ → 跳过本周期
      │
-     └── Find next dirty block (round-robin)
+     └── 查找下一个脏块（轮询扫描）
           │
-          ├── Found? → Build payload, PICC_MethodRequest(0x04)
-          │           Set up retry state, advance scan index
+          ├── 找到？ → 构建 payload，PICC_MethodRequest(0x04)
+          │           设置重试状态，推进扫描索引
           │
-          └── Not found? → Reset scan index to 0
+          └── 未找到？ → 重置扫描索引为 0
 ```
 
-### 6.3 Retry Interval Table
+### 6.3 重试间隔表
 
-| Retry # | Interval | Ticks (10ms) |
-|---------|----------|-------------|
-| 0 (initial) | 100ms | 10 |
+| 重试序号 | 间隔 | Tick 数（10ms） |
+|---------|------|----------------|
+| 0（首次） | 100ms | 10 |
 | 1 | 200ms | 20 |
 | 2 | 400ms | 40 |
 | 3 | 800ms | 80 |
 
-Max retries: **4**. After exhaustion, the dirty flag is cleared and the item is abandoned until next write.
+最大重试次数：**4 次**。耗尽后 dirty 标志被清除，该数据项被放弃直到下次写入。
 
 ---
 
-## 7. Session ID Management
+## 7. Session ID 管理
 
-### 7.1 Rules
+### 7.1 规则
 
-- **Range**: 0x01 ~ 0xFF (wraps to 0x01, never uses 0x00)
-- **Scope**: Global within STM module (not per-Provider)
-- **Reset on disconnect**: Yes, per protocol requirement
-- **Usage**: Only for async Method requests (0x03, 0x05)
+- **范围**：0x01 ~ 0xFF（达到 0xFF 后回绕至 0x01，永不使用 0x00）
+- **作用域**：STM 模块内全局（非按 Provider）
+- **断开连接时重置**：是，按协议要求
+- **使用场景**：仅用于异步 Method 请求（0x03、0x05）
 
-### 7.2 Matching Logic
+### 7.2 匹配逻辑
 
 ```
-M-core sends:  PICC_MethodRequest() → returns sessionId
-M-core stores:  Stm_PendingReadReq.sessionId = sessionId
-M-core polls:   PICC_GetResponseData(sessionId) → match response
+M 核发送：  PICC_MethodRequest() → 返回 sessionId
+M 核存储：  Stm_PendingReadReq.sessionId = sessionId
+M 核轮询：  PICC_GetResponseData(sessionId) → 匹配响应
 ```
 
 ---
 
-## 8. Integration Points
+## 8. 集成点
 
-### 8.1 Init Sequence
+### 8.1 初始化序列
 
-In `EcuM_main_init.c` → `App_Init_All()`:
+在 `EcuM_main_init.c` → `App_Init_All()` 中：
 
 ```c
 Hm_Init();
-Stm_Init();    // ← Added after Hm_Init()
+Stm_Init();    // ← 在 Hm_Init() 之后添加
 ```
 
-### 8.2 Task Integration
+### 8.2 任务集成
 
-In `Ostask_main.c` → `TASK_M0_10MS`:
+在 `Ostask_main.c` → `TASK_M0_10MS` 中：
 
 ```c
 Hm_Main();
-Stm_Main();    // ← Added after Hm_Main()
+Stm_Main();    // ← 在 Hm_Main() 之后添加
 ```
 
-### 8.3 PICC App Index Mapping
+### 8.3 PICC App 索引映射
 
-| Index | Enum | Module |
-|-------|------|--------|
-| 0 | `PICC_APP_PWSM_SRV` | Power Management Server |
-| 1 | `PICC_APP_PWSM_CLI` | Power Management Client |
-| 2 | `PICC_APP_DIAG` | Diagnostics |
-| **3** | **`PICC_APP_STM_CLI`** | **STM Consumer (Client)** |
-| 4 | `PICC_APP_STORAGE` | STM Provider (Server) |
+| 索引 | 枚举 | 模块 |
+|------|------|------|
+| 0 | `PICC_APP_PWSM_SRV` | 电源管理服务端 |
+| 1 | `PICC_APP_PWSM_CLI` | 电源管理客户端 |
+| 2 | `PICC_APP_DIAG` | 诊断 |
+| **3** | **`PICC_APP_STM_CLI`** | **STM Consumer（客户端）** |
+| 4 | `PICC_APP_STORAGE` | STM Provider（服务端） |
 
-### 8.4 PICC RX Buffer
+### 8.4 PICC 接收缓冲区
 
-`picc_mailbox.c`: `PICC_RX_MAX_DATA_LEN` changed from **32** to **80** bytes to support NVM blocks up to 64 bytes + protocol overhead.
+`picc_mailbox.c`：`PICC_RX_MAX_DATA_LEN` 从 **32** 增加到 **80** 字节，以支持最大 64 字节的 NVM 块加上协议头开销。
 
-### 8.5 Task Stack
+### 8.5 任务栈
 
-`Ostask_main.c`: `OSTASK_10MS_STACK_SIZE` changed from **256** to **320** words to accommodate `Stm_Main()` processing.
+`Ostask_main.c`：`OSTASK_10MS_STACK_SIZE` 从 **256** 增加到 **320** 字（word），以容纳 `Stm_Main()` 的处理。
 
 ---
 
-## 9. Data Flow Examples
+## 9. 数据流示例
 
-### 9.1 Local Write + Sync to A-core
+### 9.1 本地写入 + 同步到 A 核
 
 ```
-Application calls Stm_WriteLocal(0x0003, data, 4)
+应用调用 Stm_WriteLocal(0x0003, data, 4)
      │
      ├─ StmNvm_Write(0x0003, data, 4)
-     │    ├─ Update RAM mirror
+     │    ├─ 更新 RAM 镜像
      │    ├─ dirty = TRUE
-     │    ├─ Write to EEPROM (segmented)
-     │    └─ dirty = FALSE (EEPROM OK)
+     │    ├─ 写入 EEPROM（分段）
+     │    └─ dirty 保持 TRUE（EEPROM 成功，数据仍需同步给 A 核）
      │
-     └─ (Next 10ms cycle in Stm_Main())
+     └─ （下一个 10ms 周期在 Stm_Main() 中）
         │
-        └─ Stm_ProcessSyncToA() finds dirty block
-           ├─ Build payload: [0x00][0x03][data...]
+        └─ Stm_ProcessSyncToA() 发现脏块
+           ├─ 构建 payload：[0x00][0x03][data...]
            ├─ PICC_MethodRequest(0x04)
-           └─ Set up retry state
+           └─ 设置重试状态
 
-     (Response from A-core)
+     （A 核响应到达）
         │
         └─ StmNvm_ClearDirty(0x0003)
 ```
 
-### 9.2 A-core Writes to M-core
+### 9.2 A 核写入 M 核
 
 ```
-A-core sends Method 0x02: [0x00][0x01][8 bytes of data]
+A 核发送 Method 0x02：[0x00][0x01][8 字节数据]
      │
      └─ Stm_ProcessRxFromA()
-        ├─ Parse dataId=0x0001, dataLen=8
+        ├─ 解析 dataId=0x0001, dataLen=8
         ├─ StmNvm_WriteFromA(0x0001, data, 8)
-        │    ├─ Update RAM mirror + EEPROM
-        │    └─ dirty = TRUE (will be synced back to A-core later)
+        │    ├─ 更新 RAM 镜像 + EEPROM
+        │    └─ dirty = TRUE（稍后同步回 A 核）
         │
         └─ PICC_MethodResponse(0x00, [0x00][0x01][0x00][0x00])
 ```
 
-### 9.3 Disconnect → Reconnect Sequence
+### 9.3 断开 → 重连序列
 
 ```
-1. Link lost (heartbeat timeout or disconnect notification)
-2. Stm_CheckLinkState() detects link down
-3. State → WAIT_LINK
-4. Reset actions:
-   - StmNvm_ResetOnDisconnect() → clear dirty flags, preserve data
+1. 链路断开（心跳超时或断开通知）
+2. Stm_CheckLinkState() 检测到链路断开
+3. 状态 → WAIT_LINK
+4. 重置操作：
+   - StmNvm_ResetOnDisconnect() → 清除 dirty 标志，保留数据
    - Stm_ResetSessionId() → sessionId = 0
-   - Cancel retry/pending requests
-5. PICC auto-sends link requests (Client role)
-6. Both links reconnect → WAIT_CONSISTENCY
-7. Immediate transition → SYNC_TO_A
-8. Dirty data from new writes is synced to A-core
-9. All synced → RUNNING
+   - 取消重试/挂起请求
+5. PICC 自动发送链路请求（客户端角色）
+6. 两个链路重新连接 → WAIT_CONSISTENCY
+7. 立即跳转 → SYNC_TO_A
+8. 新写入产生的脏数据被同步到 A 核
+9. 全部同步完成 → RUNNING
 ```
 
 ---
 
-## 10. Configuration Guide
+## 10. 配置指南
 
-### 10.1 Adding a New Data Item
+### 10.1 添加新数据项
 
-1. **Increase `STM_MAX_DATA_ITEMS`** in `stm_cnf.h` (if > 5)
-2. **Add entry** to `g_StmDataItemCfg[]` in `stm_cnf.c`:
+1. 在 `stm_cnf.h` 中**增大 `STM_MAX_DATA_ITEMS`**（如果 > 5）
+2. 在 `stm_cnf.c` 的 `g_StmDataItemCfg[]` 中**添加条目**：
    ```c
-   { 0x0006U, 4U  },  /* Item 6: new data */
+   { 0x0006U, 4U  },  /* 数据项 6：新增数据 */
    ```
-3. **Verify EEPROM capacity**: `SUM(2 + maxDataLen) ≤ 64`
-4. **Adjust `STM_EEPROM_DATA_END_ADDR`** if more space is needed
-5. **Increase `PICC_RX_MAX_DATA_LEN`** if max payload exceeds 80 bytes
+3. **验证 EEPROM 容量**：`SUM(2 + maxDataLen) ≤ 64`
+4. 如果需要更多空间，**调整 `STM_EEPROM_DATA_END_ADDR`**
+5. 如果最大 payload 超过 80 字节，**增大 `PICC_RX_MAX_DATA_LEN`**
 
-### 10.2 Changing Retry Behavior
+### 10.2 修改重试行为
 
-Modify in `stm_cnf.h` / `stm_cnf.c`:
+在 `stm_cnf.h` / `stm_cnf.c` 中修改：
 
-| Parameter | File | Default | Description |
-|-----------|------|---------|-------------|
-| `STM_RETRY_MAX_COUNT` | `stm_cnf.h` | 4 | Max retry attempts for 0x04 |
-| `g_StmRetryIntervals[]` | `stm_cnf.c` | {10,20,40,80} | Retry intervals in 10ms ticks |
-| `STM_SYNC_MAX_PER_CYCLE` | `stm_cnf.h` | 2 | Max sync messages per 10ms cycle |
+| 参数 | 文件 | 默认值 | 描述 |
+|------|------|--------|------|
+| `STM_RETRY_MAX_COUNT` | `stm_cnf.h` | 4 | Method 0x04 最大重试次数 |
+| `g_StmRetryIntervals[]` | `stm_cnf.c` | {10,20,40,80} | 重试间隔（以 10ms tick 为单位） |
+| `STM_SYNC_MAX_PER_CYCLE` | `stm_cnf.h` | 2 | 每个 10ms 周期最大同步消息数 |
 
-### 10.3 Changing PICC IDs
+### 10.3 修改 PICC ID
 
-Modify in `stm_cnf.h`:
+在 `stm_cnf.h` 中修改：
 
-| Parameter | Default | Note |
-|-----------|---------|------|
-| `STM_PROVIDER_ID` | 41 (0x29) | M-core Server ID, must be unique system-wide |
-| `STM_CONSUMER_ID` | 42 (0x2A) | M-core Client ID, must be unique system-wide |
-| `STM_PROVIDER_REMOTE_ID` | 46 (0x2E) | A-core Server that M-core Client talks to |
-| `STM_CONSUMER_REMOTE_ID` | 47 (0x2F) | A-core Client that talks to M-core Server |
-
----
-
-## 11. Known Limitations & TODOs
-
-| # | Item | Status | Note |
-|---|------|--------|------|
-| 1 | `WAIT_CONSISTENCY` state | **Not implemented** | Currently transitions immediately to `SYNC_TO_A` |
-| 2 | Method 0x03 (M read from A, sync) | **Not fully implemented** | Only 0x05 (async) is used; 0x03 response parsing is TODO |
-| 3 | Read request timeout | **Not implemented** | If A-core never responds, request stays pending until disconnect |
-| 4 | EEPROM write error recovery | **Basic** | Returns E_NOT_OK but does not retry EEPROM write |
-| 5 | Method 0x04 retry after max retries | **Gives up** | Dirty flag cleared; data lost for sync until next write |
-| 6 | Multiple concurrent sync requests | **Not supported** | Only one 0x04 sync in-flight at a time |
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `STM_PROVIDER_ID` | 41 (0x29) | M 核服务端 ID，必须在全系统内唯一 |
+| `STM_CONSUMER_ID` | 42 (0x2A) | M 核客户端 ID，必须在全系统内唯一 |
+| `STM_PROVIDER_REMOTE_ID` | 46 (0x2E) | M 核客户端通信的 A 核服务端 ID |
+| `STM_CONSUMER_REMOTE_ID` | 47 (0x2F) | 与 M 核服务端通信的 A 核客户端 ID |
 
 ---
 
-## 12. Stack Usage Considerations
+## 11. 已知限制与待办事项
 
-All large buffers in `stm.c` and `stm_nvm.c` are declared `static` to avoid stack overflow:
+| # | 项目 | 状态 | 说明 |
+|---|------|------|------|
+| 1 | `WAIT_CONSISTENCY` 状态 | **未实现** | 当前直接跳转到 `SYNC_TO_A`。非 BUG：Method 0x01 请求在 SYNC_TO_A/RUNNING 状态中仍可正常处理 |
+| 2 | Method 0x03（M 核从 A 核同步读取） | **未完全实现** | 当前仅使用 0x05（异步）；0x03 响应解析待实现 |
+| 3 | 读取请求超时 | **未实现** | 如果 A 核始终不响应，请求将保持挂起直到断开连接 |
+| 4 | EEPROM 写入错误恢复 | **基础** | 返回 E_NOT_OK 但不重试 EEPROM 写入 |
+| 5 | Method 0x04 最大重试后 | **放弃** | dirty 标志被清除；同步数据丢失直到下次写入 |
+| 6 | 多个并发同步请求 | **不支持** | 同一时间只能有一个 0x04 同步在途 |
 
-| Variable | File | Size | Reason |
-|----------|------|------|--------|
-| `s_methodBuf` | stm.c | 68B | Method 0x01/0x02 RX buffer |
-| `s_respBuf` | stm.c | 68B | Method 0x01/0x02 TX buffer |
-| `s_syncBuf` | stm.c | 68B | Sync 0x04 RX buffer |
-| `s_txPayload` | stm.c | 66B | Sync 0x04 TX payload |
-| `s_reqPayload` | stm.c | 4B | Read 0x05 request payload |
-| `s_readRspBuf` | stm.c | 68B | Read 0x03/0x05 response buffer |
-| `s_writeBuf` | stm_nvm.c | 16B | EEPROM segmented write buffer |
+---
 
-**Task stack**: `OSTASK_10MS_STACK_SIZE = 320 words (1.25KB)` — sufficient for all STM processing.
+## 12. 栈使用考量
+
+`stm.c` 和 `stm_nvm.c` 中所有大缓冲区都声明为 `static`，以避免栈溢出：
+
+| 变量 | 文件 | 大小 | 原因 |
+|------|------|------|------|
+| `s_methodBuf` | stm.c | 68B | Method 0x01/0x02 接收缓冲区 |
+| `s_respBuf` | stm.c | 68B | Method 0x01/0x02 发送缓冲区 |
+| `s_syncBuf` | stm.c | 68B | 同步 0x04 接收缓冲区 |
+| `s_txPayload` | stm.c | 66B | 同步 0x04 发送 payload |
+| `s_reqPayload` | stm.c | 4B | 读取 0x05 请求 payload |
+| `s_readRspBuf` | stm.c | 68B | 读取 0x03/0x05 响应缓冲区 |
+| `s_writeBuf` | stm_nvm.c | 16B | EEPROM 分段写入缓冲区 |
+
+**任务栈**：`OSTASK_10MS_STACK_SIZE = 320 字（1.25KB）` — 足以支持所有 STM 处理。

@@ -611,7 +611,7 @@ void Stm_Main(void)
             /* Normal operation: all sub-tasks are active */
             Stm_ProcessRxFromA();      /* Handle A-core Method requests */
             Stm_ProcessSyncToA();       /* Sync any new dirty data */
-            Stm_ProcessAppReadReq();   /* Handle pending read responses */
+            Stm_ProcessAppReadReq();   /* too do Handle pending read responses */
 
             /* Check link state - transition to WAIT_LINK if either link is lost */
             Stm_CheckLinkState();
