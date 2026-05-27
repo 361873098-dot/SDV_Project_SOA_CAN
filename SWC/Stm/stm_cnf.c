@@ -59,6 +59,7 @@ const uint16 g_StmRetryIntervals[STM_RETRY_INTERVAL_COUNT] = {
 ***********************************************************************************************************************/
 #include "stm_main.h"
 #include "stm_nvm.h"
+#include "eeprom.h"
 #include <string.h>
 
 /* Global variables for TRACE32 debugging */
@@ -79,6 +80,8 @@ Std_ReturnType NVM_test_result = E_OK; /* Store last operation result */
  *   NVM_test_flag = 5: Write local RAM & EEPROM (dataId = 0x0002, len = 16)
  *   NVM_test_flag = 6: Read local RAM (dataId = 0x0002)
  *   NVM_test_flag = 7: Manually mark all valid blocks as dirty to trigger Method 0x04 sync-to-A
+ *   NVM_test_flag = 8: Read raw magic byte from EEPROM addr 0x10 (page boundary diagnostic)
+ *   NVM_test_flag = 9: Read raw 16 bytes from EEPROM addr 0x10 (dump magic + Block[0] area)
  *
  * Automatically resets NVM_test_flag to 0U after processing.
  */
@@ -104,9 +107,9 @@ void Stm_ProcessTest(void)
             break;
 
         case 2U:
-            /* Case 2: Read data from Item 1 (dataId=0x0001) */
+            /* Case 2: Read data from Item 1 (dataId=0x0001) directly from EEPROM */
             (void)memset(NVM_test_read_buf, 0, sizeof(NVM_test_read_buf));
-            NVM_test_result = Stm_ReadLocal(0x0001U, NVM_test_read_buf, sizeof(NVM_test_read_buf), &NVM_test_read_len);
+            NVM_test_result = StmNvm_ReadFromEeprom(0x0001U, NVM_test_read_buf, sizeof(NVM_test_read_buf), &NVM_test_read_len);
             break;
 
         case 3U:
@@ -129,15 +132,48 @@ void Stm_ProcessTest(void)
             break;
 
         case 6U:
-            /* Case 6: Read data from Item 2 (dataId=0x0002) */
+            /* Case 6: Read data from Item 2 (dataId=0x0002) directly from EEPROM */
             (void)memset(NVM_test_read_buf, 0, sizeof(NVM_test_read_buf));
-            NVM_test_result = Stm_ReadLocal(0x0002U, NVM_test_read_buf, sizeof(NVM_test_read_buf), &NVM_test_read_len);
+            NVM_test_result = StmNvm_ReadFromEeprom(0x0002U, NVM_test_read_buf, sizeof(NVM_test_read_buf), &NVM_test_read_len);
             break;
 
         case 7U:
             /* Case 7: Mark all valid blocks dirty to force a full Method 0x04 sync to A-core */
             StmNvm_SetAllValidDirty();
             NVM_test_result = E_OK;
+            break;
+
+        case 8U:
+            /* Case 8: Read raw magic byte from EEPROM at addr 0x10
+             * Used to diagnose page boundary corruption.
+             * After format or write, magic should be 0xA5.
+             * If it's NOT 0xA5, a page-crossing write corrupted it.
+             * Result: NVM_test_read_buf[0] = raw magic byte value
+             *         NVM_test_read_len = 0xA500 | magic_value */
+            (void)memset(NVM_test_read_buf, 0, sizeof(NVM_test_read_buf));
+            NVM_test_result = Eeprom_ReadBytes(STM_EEPROM_MAGIC_ADDR, NVM_test_read_buf, 1U);
+            if (NVM_test_result == E_OK)
+            {
+                NVM_test_read_len = (uint16)(0xA500U | (uint16)NVM_test_read_buf[0]);
+            }
+            break;
+
+        case 9U:
+            /* Case 9: Read raw 16 bytes from EEPROM starting at addr 0x10
+             * Dumps magic byte + Block[0] header + Block[0] data area.
+             * Expected layout:
+             *   [0x10] = 0xA5 (magic)
+             *   [0x11] = valid flag (0x01 if written)
+             *   [0x12] = data length
+             *   [0x13..] = data bytes
+             * Result: NVM_test_read_buf[0..15] = raw EEPROM bytes
+             *         NVM_test_read_len = 16 */
+            (void)memset(NVM_test_read_buf, 0, sizeof(NVM_test_read_buf));
+            NVM_test_result = Eeprom_ReadBytes(STM_EEPROM_MAGIC_ADDR, NVM_test_read_buf, 16U);
+            if (NVM_test_result == E_OK)
+            {
+                NVM_test_read_len = 16U;
+            }
             break;
 
         default:

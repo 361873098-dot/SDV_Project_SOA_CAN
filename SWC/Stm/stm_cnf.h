@@ -34,7 +34,7 @@ extern "C"{
  ***********************************************************************************************************************/
 
 /** IPCF channel for STM (Channel 1 = HP) */
-#define STM_CHANNEL_ID                 (1U)
+#define STM_CHANNEL_ID                 (2U)
 
 /** M-Core Server ProviderID (Storage module range: 0x41~0x46) */
 #define STM_PROVIDER_ID               (41U)   /* 0x29 */

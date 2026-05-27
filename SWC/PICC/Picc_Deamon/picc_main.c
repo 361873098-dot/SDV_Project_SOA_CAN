@@ -116,8 +116,8 @@ volatile uint8 exit_code;
  *==================================================================================================*/
 
 /** Diagnostic record buffer: 20 rows × 30 bytes per row */
-#define PICC_DIAG_RECORD_ROWS       (20U)
-#define PICC_DIAG_RECORD_COLS       (30U)
+#define PICC_DIAG_RECORD_ROWS       (30U)
+#define PICC_DIAG_RECORD_COLS       (15U)
 
 /** Diagnostic record structure */
 typedef struct {
@@ -218,9 +218,16 @@ static void PICC_DiagRecordAdd(PICC_DiagRecord_t *record, const uint8 *data, uin
             continue;
         }
 
-        /* Filter: only record DiagMgmt (activation line) messages
-         * ProviderID (byte[0]) == 0x34 (52) AND ConsumerID (byte[2]) == 0x3C (60) */
-        if ((msgPtr[0] != 81U) || (msgPtr[2] != 91U)) {
+        /* Filter: only record Storage Middleware (STM) messages defined by Stm_Init:
+         * 1. M-Core Server role: ProviderID == 41U (0x29) AND ConsumerID == 46U (0x2E)
+         * 2. M-Core Client role: ProviderID == 47U (0x2F) AND ConsumerID == 42U (0x2A) */
+        boolean isStmMsg = FALSE;
+        if (((msgPtr[0] == 41U) && (msgPtr[2] == 46U)) ||
+            ((msgPtr[0] == 47U) && (msgPtr[2] == 42U))) {
+            isStmMsg = TRUE;
+        }
+
+        if (isStmMsg == FALSE) {
             offset += msgLen;
             continue;
         }

@@ -36,6 +36,7 @@
 #include "Platform.h"
 #include "stm_nvm.h"
 #include "eeprom.h"
+#include "OsIf.h"
 #include <string.h>
 
 /***********************************************************************************************************************
@@ -53,6 +54,35 @@ static boolean g_nvmReady = FALSE;
 /***********************************************************************************************************************
 *  static helper functions
 ***********************************************************************************************************************/
+
+/**
+ * @brief Precise hardware-calibrated delay function (millisecond level)
+ * 
+ * Uses NXP OsIf library with OSIF_COUNTER_DUMMY.
+ * Safe to call both before and after the FreeRTOS scheduler starts.
+ */
+static void StmNvm_DelayMs(uint32 ms)
+{
+    volatile uint32 count;
+    uint32 i;
+
+    for (i = 0U; i < ms; i++)
+    {
+        /* Calibrated loop for Cortex-M7 running at 400MHz.
+         * A volatile loop takes approx 3-4 CPU clock cycles per iteration.
+         * 1ms = 400,000 clock cycles.
+         * 400,000 / 3 = 133,333 iterations per millisecond.
+         * We use 1,500,000 iterations per millisecond to ensure that we wait AT LEAST 1ms
+         * under all compiler, caching, pipeline and dual-issue execution conditions,
+         * giving a safe margin for EEPROM t_WR. */
+        for (count = 0U; count < 1500000U; count++)
+        {
+            __asm volatile("nop");
+        }
+    }
+}
+
+extern uint16 NVM_test_read_len;
 
 /**
  * @brief Find block index by dataId
@@ -205,11 +235,14 @@ static Std_ReturnType StmNvm_WriteBlockToEeprom(uint16 index)
     s_writeBuf[0] = g_nvmBlocks[index].valid;
     s_writeBuf[1] = (uint8)g_nvmBlocks[index].dataLen;
 
+    NVM_test_read_len = 0U;
     ret = Eeprom_WriteBytes(eepromAddr, s_writeBuf, 2U);
     if (ret != E_OK)
     {
+        NVM_test_read_len = 300U + index;
         return E_NOT_OK;
     }
+    StmNvm_DelayMs(10U);  /* t_WR: wait 10ms for EEPROM to complete physical write cycle */
 
     /* Phase 2: Write data payload in segments of EEPROM_WRITE_MAX_LEN */
     bytesRemaining = g_nvmBlocks[index].dataLen;
@@ -234,13 +267,16 @@ static Std_ReturnType StmNvm_WriteBlockToEeprom(uint16 index)
         ret = Eeprom_WriteBytes(eepromAddr, s_writeBuf, (uint16)chunkLen);
         if (ret != E_OK)
         {
+            NVM_test_read_len = 400U + index;
             return E_NOT_OK;
         }
+        StmNvm_DelayMs(10U);  /* t_WR: wait 10ms for EEPROM to complete physical write cycle */
 
         writeOffset += chunkLen;
         bytesRemaining -= chunkLen;
     }
 
+    NVM_test_read_len = 0x55AAU;
     return E_OK;
 }
 
@@ -349,6 +385,94 @@ Std_ReturnType StmNvm_Read(uint16 dataId, uint8 *data, uint16 maxLen, uint16 *ac
     {
         uint16 copyLen = (g_nvmBlocks[idx].dataLen > maxLen) ? maxLen : g_nvmBlocks[idx].dataLen;
         (void)memcpy(data, g_nvmBlocks[idx].data, copyLen);
+    }
+
+    return E_OK;
+}
+
+/**
+ * Read data directly from EEPROM (bypasses RAM mirror).
+ *
+ * Reads the header (valid + len) and data from EEPROM hardware,
+ * copies data to caller's buffer. Does NOT update the RAM mirror.
+ * Used for debug verification to compare EEPROM vs RAM contents.
+ *
+ * @param dataId    Data item identifier
+ * @param data      Destination buffer
+ * @param maxLen    Buffer capacity
+ * @param actualLen Actual data length read from EEPROM (may be NULL)
+ * @return E_OK on success, E_NOT_OK on failure
+ */
+Std_ReturnType StmNvm_ReadFromEeprom(uint16 dataId, uint8 *data, uint16 maxLen, uint16 *actualLen)
+{
+    uint16 idx;
+    uint8 headerBuf[2U];
+    uint8 eepromAddr;
+    uint16 dataOffset;
+    uint16 eepromDataLen;
+    uint16 copyLen;
+    Std_ReturnType ret;
+
+    /* Guard: NVM must be initialized (EEPROM driver ready) */
+    if (g_nvmReady == FALSE)
+    {
+        return E_NOT_OK;
+    }
+
+    /* Guard: output buffer must not be NULL */
+    if (data == NULL)
+    {
+        return E_NOT_OK;
+    }
+
+    /* Look up block index by dataId */
+    idx = StmNvm_FindIndex(dataId);
+    if (idx == 0xFFFFU)
+    {
+        return E_NOT_OK;
+    }
+
+    /* Compute EEPROM offset from init-time computed value */
+    dataOffset = g_nvmBlocks[idx].eepromOffset;
+
+    /* Step 1: Read valid + len header directly from EEPROM */
+    eepromAddr = (uint8)(STM_EEPROM_DATA_START_ADDR + dataOffset);
+    ret = Eeprom_ReadBytes(eepromAddr, headerBuf, 2U);
+    if (ret != E_OK)
+    {
+        return E_NOT_OK;
+    }
+
+    /* Validate header: valid flag and data length */
+    if (headerBuf[0] == (uint8)FALSE)
+    {
+        /* EEPROM says block is not valid */
+        return E_NOT_OK;
+    }
+
+    eepromDataLen = (uint16)headerBuf[1];
+    if (eepromDataLen > g_StmDataItemCfg[idx].maxDataLen)
+    {
+        /* Corrupted length field */
+        return E_NOT_OK;
+    }
+
+    /* Return actual data length if caller requested it */
+    if (actualLen != NULL)
+    {
+        *actualLen = eepromDataLen;
+    }
+
+    /* Step 2: Read actual data directly from EEPROM */
+    if (eepromDataLen > 0U)
+    {
+        eepromAddr = (uint8)(STM_EEPROM_DATA_START_ADDR + dataOffset + 2U);
+        copyLen = (eepromDataLen > maxLen) ? maxLen : eepromDataLen;
+        ret = Eeprom_ReadBytes(eepromAddr, data, copyLen);
+        if (ret != E_OK)
+        {
+            return E_NOT_OK;
+        }
     }
 
     return E_OK;
@@ -509,13 +633,16 @@ Std_ReturnType StmNvm_FormatEeprom(void)
     uint16 bytesRemaining;
     uint16 writeOffset;
 
+    NVM_test_read_len = 0U;
     /* Step 1: Write magic byte to mark EEPROM as formatted */
     uint8 magicVal = STM_EEPROM_MAGIC_VALUE;
     ret = Eeprom_WriteBytes(STM_EEPROM_MAGIC_ADDR, &magicVal, 1U);
     if (ret != E_OK)
     {
+        NVM_test_read_len = 100U;
         return E_NOT_OK;
     }
+    StmNvm_DelayMs(10U);  /* t_WR: wait 10ms for EEPROM to complete physical write cycle */
 
     /* Step 2: Clear all data blocks in EEPROM (write zeros) */
     (void)memset(zeroBuf, 0, sizeof(zeroBuf));
@@ -537,8 +664,10 @@ Std_ReturnType StmNvm_FormatEeprom(void)
             ret = Eeprom_WriteBytes(eepromAddr, zeroBuf, (uint16)chunkLen);
             if (ret != E_OK)
             {
+                NVM_test_read_len = 200U + i;
                 return E_NOT_OK;
             }
+            StmNvm_DelayMs(10U);  /* t_WR: wait 10ms for EEPROM to complete physical write cycle */
 
             writeOffset += chunkLen;
             bytesRemaining -= chunkLen;
@@ -550,6 +679,8 @@ Std_ReturnType StmNvm_FormatEeprom(void)
         g_nvmBlocks[i].valid = FALSE;
         g_nvmBlocks[i].dirty = FALSE;
     }
+
+    NVM_test_read_len = 0xAA55U;
 
     return E_OK;
 }

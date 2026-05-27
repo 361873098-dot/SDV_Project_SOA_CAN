@@ -109,47 +109,96 @@ Std_ReturnType Eeprom_ReadBytes(uint8 address, uint8 *data, uint16 length)
 /***********************************************************************************************************************
  *  Function name    : Eeprom_WriteBytes()
  *
- *  Description      : Write bytes to EEPROM.
+ *  Description      : Write bytes to EEPROM with page-aligned splitting.
+ *
+ *                     CRITICAL: EEPROM devices wrap the internal address pointer
+ *                     at page boundaries during a write operation. If a single write
+ *                     crosses a page boundary, bytes that overflow wrap to the START
+ *                     of the current page, silently overwriting existing data.
+ *
+ *                     This function automatically splits writes at page boundaries
+ *                     (defined by EEPROM_PAGE_SIZE) to prevent this corruption.
+ *                     A 10ms delay is inserted between page writes for the EEPROM
+ *                     internal write cycle time (t_WR).
  *
  *  List of arguments: address - EEPROM internal address to write to
  *                     data    - Pointer to buffer containing data to write
+ *                     length  - Number of bytes to write
  *
- *  Return value     : E_OK     - Write request accepted by I2C driver
- *                     E_NOT_OK - Write request failed
+ *  Return value     : E_OK     - Write succeeded
+ *                     E_NOT_OK - Write request failed or invalid parameters
  *
  ***********************************************************************************************************************/
 Std_ReturnType Eeprom_WriteBytes(uint8 address, uint8 *data, uint16 length)
 {
-  
     Std_ReturnType ret;
-    uint16 index;
-    uint8 txBuf[1U + EEPROM_WRITE_MAX_LEN];
+    uint16 offset;
+    uint16 chunkLen;
+    uint16 pageRemaining;
+    uint16 idx;
+    uint8  txBuf[1U + EEPROM_PAGE_SIZE]; /* 1 byte address + max 1 page of data */
     I2c_RequestType req;
 
-    if ((data == NULL_PTR) || (length == 0U) || (length > EEPROM_WRITE_MAX_LEN))
+    if ((data == NULL_PTR) || (length == 0U))
     {
         return E_NOT_OK;
     }
 
-    txBuf[0] = address;
-    for (index = 0U; index < length; index++)
-    {
-        txBuf[index + 1U] = data[index];
-    }
+    offset = 0U;
 
-    req.SlaveAddress = EEPROM_I2C_SLAVE_ADDR_7BIT;
-    req.BitsSlaveAddressSize = FALSE;
-    req.HighSpeedMode = FALSE;
-    req.ExpectNack = FALSE;
-    req.RepeatedStart = FALSE;
-    req.BufferSize = length + 1U;
-    req.DataDirection = I2C_SEND_DATA;
-    req.DataBuffer = txBuf;
-
-    ret = I2c_SyncTransmit(EEPROM_I2C_CHANNEL, &req);
-    if (ret != E_OK)
+    while (offset < length)
     {
-        return E_NOT_OK;
+        /* Calculate how many bytes remain in the current page */
+        pageRemaining = (uint16)EEPROM_PAGE_SIZE - (uint16)(((uint16)address + offset) % (uint16)EEPROM_PAGE_SIZE);
+
+        /* Chunk size = min(remaining_data, page_remaining) */
+        chunkLen = length - offset;
+        if (chunkLen > pageRemaining)
+        {
+            chunkLen = pageRemaining;
+        }
+
+        /* Build I2C transmit buffer: [eeprom_addr][data_byte_0]...[data_byte_n] */
+        txBuf[0] = (uint8)((uint16)address + offset);
+        for (idx = 0U; idx < chunkLen; idx++)
+        {
+            txBuf[idx + 1U] = data[offset + idx];
+        }
+
+        req.SlaveAddress = EEPROM_I2C_SLAVE_ADDR_7BIT;
+        req.BitsSlaveAddressSize = FALSE;
+        req.HighSpeedMode = FALSE;
+        req.ExpectNack = FALSE;
+        req.RepeatedStart = FALSE;
+        req.BufferSize = chunkLen + 1U;
+        req.DataDirection = I2C_SEND_DATA;
+        req.DataBuffer = txBuf;
+
+        ret = I2c_SyncTransmit(EEPROM_I2C_CHANNEL, &req);
+        if (ret != E_OK)
+        {
+            return E_NOT_OK;
+        }
+
+        offset += chunkLen;
+
+        /* Wait for EEPROM internal write cycle (t_WR = 5~10ms typical).
+         * This delay is needed between page writes because the EEPROM
+         * will NACK any I2C access during its internal write cycle.
+         * We only add the delay if there are more chunks to write. */
+        if (offset < length)
+        {
+            volatile uint32 count;
+            uint32 i;
+            /* 10ms delay at 400MHz: same calibration as StmNvm_DelayMs */
+            for (i = 0U; i < 10U; i++)
+            {
+                for (count = 0U; count < 1500000U; count++)
+                {
+                    __asm volatile("nop");
+                }
+            }
+        }
     }
 
     return E_OK;

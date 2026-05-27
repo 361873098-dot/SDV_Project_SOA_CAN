@@ -1149,6 +1149,11 @@
                   <data type="Version">0.1.0</data>
                </feature>
             </dependency>
+            <dependency resourceType="Tool" resourceId="Clocks" description="外围设备工具需要 Clocks 工具，但它已被禁用。" problem_level="2" source="Peripherals">
+               <feature name="enabled" evaluation="equal">
+                  <data>true</data>
+               </feature>
+            </dependency>
          </dependencies>
          <generated_project_files>
             <file path="board/Siul2_Port_Ip_Cfg.h" update_enabled="true"/>
@@ -2141,9 +2146,9 @@
                                  <struct name="91">
                                     <setting name="Name" value="PlatformIsrConfig_91"/>
                                     <setting name="IsrName" value="I2C0_IRQn"/>
-                                    <setting name="IsrEnabled" value="false"/>
-                                    <setting name="IsrPriority" value="0"/>
-                                    <setting name="IsrHandler" value="undefined_handler"/>
+                                    <setting name="IsrEnabled" value="true"/>
+                                    <setting name="IsrPriority" value="5"/>
+                                    <setting name="IsrHandler" value="I2c_Ip_IRQHandler0"/>
                                  </struct>
                                  <struct name="92">
                                     <setting name="Name" value="PlatformIsrConfig_92"/>
@@ -2169,9 +2174,9 @@
                                  <struct name="95">
                                     <setting name="Name" value="PlatformIsrConfig_95"/>
                                     <setting name="IsrName" value="I2C4_IRQn"/>
-                                    <setting name="IsrEnabled" value="false"/>
-                                    <setting name="IsrPriority" value="0"/>
-                                    <setting name="IsrHandler" value="undefined_handler"/>
+                                    <setting name="IsrEnabled" value="true"/>
+                                    <setting name="IsrPriority" value="6"/>
+                                    <setting name="IsrHandler" value="I2c_Ip_IRQHandler4"/>
                                  </struct>
                                  <struct name="96">
                                     <setting name="Name" value="PlatformIsrConfig_96"/>

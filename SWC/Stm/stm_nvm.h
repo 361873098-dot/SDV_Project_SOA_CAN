@@ -104,6 +104,24 @@ extern boolean StmNvm_IsReady(void);
 extern Std_ReturnType StmNvm_Read(uint16 dataId, uint8 *data, uint16 maxLen, uint16 *actualLen);
 
 /***********************************************************************************************************************
+ *  Function name    : StmNvm_ReadFromEeprom()
+ *
+ *  Description      : Read data directly from EEPROM hardware (bypasses RAM mirror).
+ *                     Does NOT update the RAM mirror. Used for debug verification
+ *                     to compare EEPROM actual contents vs RAM mirror contents.
+ *
+ *  List of arguments: dataId     - Data item identifier
+ *                     data       - Destination buffer
+ *                     maxLen     - Buffer capacity
+ *                     actualLen  - Actual data length read from EEPROM (may be NULL)
+ *
+ *  Return value     : E_OK     - Read succeeded
+ *                     E_NOT_OK - Invalid dataId, block not valid in EEPROM, or EEPROM read failure
+ *
+ ***********************************************************************************************************************/
+extern Std_ReturnType StmNvm_ReadFromEeprom(uint16 dataId, uint8 *data, uint16 maxLen, uint16 *actualLen);
+
+/***********************************************************************************************************************
  *  Function name    : StmNvm_Write()
  *
  *  Description      : Write data to RAM mirror and sync to EEPROM.

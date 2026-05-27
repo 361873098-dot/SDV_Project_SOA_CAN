@@ -35,6 +35,27 @@
 #define EEPROM_8BYTE_LEN            (8U)
 #define EEPROM_WRITE_MAX_LEN       (16U)          /* Maximum number of bytes to write in one I2C transfer, depends on the EEPROM device capability */
 
+/**
+ * EEPROM page size in bytes.
+ * CRITICAL: All EEPROM writes MUST NOT cross a page boundary!
+ * If a write spans two pages, the EEPROM wraps the address pointer
+ * within the current page, silently overwriting data at the page start.
+ *
+ * Common values:
+ *   24C02  = 8 bytes/page
+ *   24C04  = 16 bytes/page
+ *   24C08  = 16 bytes/page
+ *   24C16  = 16 bytes/page
+ *   24C32  = 32 bytes/page
+ *   24C64  = 32 bytes/page
+ *   24C128 = 64 bytes/page
+ *   24C256 = 64 bytes/page
+ *
+ * Set this to match the actual EEPROM device on your hardware.
+ * Using a value smaller than the actual page size is always safe.
+ */
+#define EEPROM_PAGE_SIZE            (8U)
+
 /***********************************************************************************************************************
  *  Function name    : Eeprom_ReadBytes()
  *

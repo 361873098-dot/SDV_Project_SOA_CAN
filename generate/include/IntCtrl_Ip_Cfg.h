@@ -71,6 +71,8 @@ extern const IntCtrl_Ip_CtrlConfigType intCtrlConfig;
 /* Declaration of the ISR Handlers */
 extern void undefined_handler(void);
 extern void ipc_shm_hardirq(void);
+extern void I2c_Ip_IRQHandler0(void);
+extern void I2c_Ip_IRQHandler4(void);
 
 #define PLATFORM_STOP_SEC_CONFIG_DATA_UNSPECIFIED
 #include "Platform_MemMap.h"
