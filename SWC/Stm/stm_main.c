@@ -703,7 +703,7 @@ Std_ReturnType Stm_ReadLocal(uint16 dataId, uint8 *data, uint16 maxLen, uint16 *
 /**
  * Asynchronously request A-core to send data for the specified dataId.
  *
- * Uses Method 0x05 (M async read from A) with PICC_METHOD_WITH_RESPONSE.
+ * Uses Method 0x03 /0x5 (M async read from A) with PICC_METHOD_WITH_RESPONSE.
  * The response is handled asynchronously in Stm_ProcessAppReadReq().
  *
  * Constraints:

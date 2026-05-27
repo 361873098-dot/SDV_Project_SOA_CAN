@@ -15,7 +15,7 @@ STM 模块向调试器暴露了一组全局变量。这些变量在 `Stm_Main()`
 | **`NVM_test_flag`** | `volatile uint8` | 全局变量 | **测试用例选择器**。当设置为非零值（1~7）时触发对应的测试分支。执行完成后会自动重置为 `0`。 |
 | **`NVM_test_write_val`** | `uint8` | 全局变量 | 写入测试的**种子值**。写入数据块的数据从此值开始逐字节递增。（默认值：`0xAA`） |
 | **`NVM_test_read_buf[16]`**| `uint8` | 全局变量 | **读取缓冲区**。在读取测试分支中接收来自本地 NVM 的数据。 |
-| **`NVM_test_read_len`** | `uint16` | 全局变量 | **实际读取长度**。指示成功加载到 `NVM_test_read_buf` 中的有效字节数。 |
+| **`NVM_test_read_len`** | `uint16` | 全局变量 | **实际读取长度**。指示成功加载 to `NVM_test_read_buf` 中的有效字节数。 |
 | **`NVM_test_result`** | `Std_ReturnType` | 全局变量 | **操作结果**。存储上一次执行的测试用例的状态（`0x00` = `E_OK`，`0x01` = `E_NOT_OK`）。 |
 
 ---
@@ -78,7 +78,7 @@ ENDDO
 
 ---
 
-## 3. 详细测试用例（用例序号与 NVM_test_flag 完美对应）
+## 3. 详细测试用例与预期数据流（含具体 IPCF 报文）
 
 ### 测试用例 1 (NVM_test_flag = 1) ：本地 RAM 与 EEPROM 写入（数据块 1）
 * **测试目的**：验证写入数据块 1（`dataId = 0x0001`，最大长度 8 字节）是否能正确更新 RAM 镜像并即时写入物理 EEPROM。
@@ -91,17 +91,25 @@ ENDDO
      ```orcas
      Var.set NVM_test_flag = 1
      ```
-* **预期结果**：
-  * `NVM_test_flag` 在 10ms 内自动恢复为 `0`。
-  * `NVM_test_result` 显示 `0x00` (`E_OK`)。
-  * 数据块 1 的 RAM 镜像更新为：`[0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x5B, 0x5C]`。
+* **预期结果（具体变量与存储镜像）**：
+  * **全局调试变量状态**：
+    * `NVM_test_flag` 自动清零恢复为 `0`。
+    * `NVM_test_result` 显示 `0x00` (`E_OK`)。
+  * **RAM 镜像状态 (`g_nvmBlocks[0]`)**：
+    * `data` 数组被填充为：`[0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x5B, 0x5C]`。
+    * `dataLen` 成员更新为：`8`（十进制）。
+    * `valid` 标志更新为：`0x01` (`TRUE`)。
+    * `dirty` 标志更新为：`0x01` (`TRUE`)（指示本地有更改，需要通过 Method 0x04 同步给 A 核）。
+    * `eepromOffset` 保持为：`0`（静态计算分配）。
     > [!TIP]
-    > **如何在调试器中查看此 RAM 镜像**：由于 RAM 镜像是静态（`static`）全局变量，定义在 `stm_nvm.c` 文件中。您可以在 TRACE32 命令行中输入以下命令直接将其以结构体形式展开观测：
+    > **如何在调试器中查看此 RAM 镜像**：可以在 TRACE32 命令行输入以下命令直接将其以结构体形式展开观测：
     > ```orcas
     > Var.View \\stm_nvm\g_nvmBlocks[0]
     > ```
-    > 展开后可查看其各成员变量：`data`（即本地缓存数据 `0x55..`）、`dataLen`（当前长度 `8`）、`valid`（是否有效 `1`）、`dirty`（是否为脏数据 `0`）等字段。
-  * 物理 EEPROM 对应数据块 1 的地址空间显示完全相同的 8 字节数据，且前缀有正确的头部：`[0x01] [0x08]` (Valid=TRUE, Length=8)。
+  * **物理 EEPROM 状态（地址偏移 `0x11` 开始）**：
+    * `0x11`（Valid）= `0x01`
+    * `0x12`（Length）= `0x08`
+    * `0x13 ~ 0x1A`（Payload）= `0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x5B, 0x5C`
 
 ---
 
@@ -112,31 +120,62 @@ ENDDO
      ```orcas
      Var.set NVM_test_flag = 2
      ```
-* **预期结果**：
-  * `NVM_test_flag` 自动清零。
-  * `NVM_test_result` 显示 `0x00` (`E_OK`)。
-  * `NVM_test_read_len` 显示为 `8`（十进制）。
-  * `NVM_test_read_buf` 被填充为：`0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x00...`。
+* **预期结果（具体变量）**：
+  * **全局调试变量状态**：
+    * `NVM_test_flag` 自动清零恢复为 `0`。
+    * `NVM_test_result` 显示 `0x00` (`E_OK`)。
+    * `NVM_test_read_len` 显示为 `8`（十进制）。
+    * `NVM_test_read_buf[0..7]` 被精确填充为：`0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x5B, 0x5C`，其余字节自动清零。
 
 ---
 
 ### 测试用例 3 (NVM_test_flag = 3) ：跨核异步读取请求（Method 0x05 / 0x03 统一入口）
-* **测试目的**：测试 M 核作为 Client 端的跨核读取能力，验证重构后的统一读请求 API `Stm_RequestReadFromA(methodId, dataId)`。此 API 统一支持 Method 0x03（读取最新数据）与 Method 0x05（读取滚动数据）的数据拉取。
+* **测试目的**：测试 M 核作为 Client 端的跨核读取能力，验证重写后的统一读请求 API `Stm_RequestReadFromA(methodId, dataId)`。此 API 统一支持 Method 0x03（读取最新数据）与 Method 0x05（读取滚动数据）的数据拉取。
 * **操作步骤**：
   1. 确保 M 核与 A 核的跨核通信链路已建立成功，且状态机处于 `RUNNING`（运行）状态。
   2. 触发 Case 3（代码内部会调用 `Stm_RequestReadFromA(STM_METHOD_M_ASYNC_READ, 0x0002U)`）：
      ```orcas
      Var.set NVM_test_flag = 3
      ```
-* **预期结果**：
-  * M 核将组装一个 Method 0x05 (`STM_METHOD_M_ASYNC_READ`) 的请求报文，并使用递增的 `SessionID`。
-  * 请求报文通过 IPCF 通道成功发送给 A 核。
-  * 当 A 核作为 Provider 回复 `RESPONSE`（包含请求的数据负载）后，M 核接收中断会解析该 `SessionID` 进行匹配，自动更新本地的 RAM 镜像与 EEPROM 存储。之后可通过触发**测试用例 6**来验证接收到的新数据。
-  * > [!NOTE]
-  * > **接口统一重构说明**：为了优化代码存储空间并增强复用性，`Stm_RequestReadFromA` 已经升级为二合一的通用读取函数。
-  * > * 调用 `Stm_RequestReadFromA(STM_METHOD_M_READ_FROM_A, dataId)` 即发起 **Method 0x03** 读取请求；
-  * > * 调用 `Stm_RequestReadFromA(STM_METHOD_M_ASYNC_READ, dataId)` 即发起 **Method 0x05** 读取请求。
-  * > 无论哪种请求，均公用同一套挂起追踪结构体 `Stm_PendingReadReq` 进行 SessionID 的自动应答匹配与接收，让读取流程高度解耦且维护成本极低。
+* **预期结果（具体变量与 IPCF 物理帧）**：
+  * **全局调试变量及挂起状态**：
+    * `NVM_test_flag` 自动恢复为 `0`，`NVM_test_result` 显示 `0x00` (`E_OK`)。
+    * 挂起追踪结构体 `Stm_PendingReadReq` 状态更新为：
+      * `dataId` = `0x0002`，`methodId` = `0x05`，`active` = `1U`。
+      * `sessionId` = 获取到当前分配的唯一 SessionID（假设为首个请求 `0x01`）。
+  * **IPCF 通道 1 发送物理帧数据（M核Client $\rightarrow$ A核Server）**：
+    * **底层的 8 字节私有 IPC Header**：
+      * `ProviderID` (A核Server) = `0x2F` (47)
+      * `MethodID` (业务Method) = `0x05` (Method 0x05)
+      * `ConsumerID` (M核Client) = `0x2A` (42)
+      * `SessionID` = `0x01`
+      * `MessageType` = `0x05` (REQUEST)
+      * `ReturnCode` = `0x00`
+      * `Length` (2B 负载长度) = `0x00 0x04` (4字节)
+    * **4 字节业务 Payload**：
+      * `dataId` (2B 大端) = `0x00 0x02`
+      * `Reserved` (2B) = `0x00 0x00`
+    * **单包私有协议数据**：`2F 05 2A 01 05 00 00 04 00 02 00 00`
+    * **最终网络上传输的物理通道堆叠帧**：
+      * 格式：`[1B CRC使能] [N字节私有包] [2B 通道发送Counter] [2B CRC16]`
+      * 假设此时通道 Counter 累加为 `0x000A`，则发送帧数据为：
+        `00 2F 05 2A 01 05 00 00 04 00 02 00 00 00 0A [CRC_H] [CRC_L]`
+  * **IPCF 通道 1 接收物理帧数据（A核Server $\rightarrow$ M核Client）**：
+    * A 核处理请求后，向 M 核回传包含 16 字节数据内容的 RESPONSE 帧。
+    * **底层的 8 字节私有 IPC Header**：
+      * `ProviderID` = `0x2F`，`MethodID` = `0x05`，`ConsumerID` = `0x2A`。
+      * `SessionID` = `0x01` (匹配请求)。
+      * `MessageType` = `0x80` (RESPONSE)
+      * `ReturnCode` = `0x00` (成功处理)
+      * `Length` (2B 负载长度) = `0x00 0x14` (20字节)
+    * **20 字节业务 Payload**：
+      * `dataId` (2B) = `0x00 0x02`
+      * `status` (2B 成功) = `0x00 0x00`
+      * `data` (16B 业务数据，假设为) = `0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F`
+    * **最终网络上收到的物理通道堆叠帧**：
+      * 格式同上，假设通道接收 Counter 为 `0x000B`：
+        `00 2F 05 2A 01 80 00 00 14 00 02 00 00 10 11 12 13 14 15 16 17 18 19 1A 1B 1C 1D 1E 1F 00 0B [CRC_H] [CRC_L]`
+  * **接收解析**：M 核接收中断解析该报文并发现 `SessionID` 匹配 `0x01` 成功，会将 16 字节数据更新写入本地 Block 2 的 RAM 及 EEPROM 中，并将 `Stm_PendingReadReq.active` 重置为 `0`。
 
 ---
 
@@ -147,11 +186,18 @@ ENDDO
      ```orcas
      Var.set NVM_test_flag = 4
      ```
-* **预期结果**：
-  * EEPROM 地址 `0x10` 的 Magic Byte 重新写入为 `0xA5`。
-  * EEPROM 中所有 5 个已配置数据块的 valid 标志被设置为 `FALSE` (`0x00`)，擦除其校验状态。
-  * 所有的 RAM 镜像清空为 `0`，并标记为 clean。
-  * 执行**测试用例 2**，由于数据块 1 已失效，API 应返回 `E_NOT_OK` (`0x01`)。
+* **预期结果（具体变量与存储空间变化）**：
+  * **全局调试变量状态**：
+    * `NVM_test_flag` 恢复为 `0`，`NVM_test_result` 显示 `0x00` (`E_OK`)。
+  * **EEPROM 物理存储空间状态**：
+    * `0x10`（Magic Byte）写入为首飞标志 `0xA5`。
+    * 数据存储区 `0x11 ~ 0x50` 范围的所有 64 字节**全部被格式化清空为 `0x00`**。
+  * **RAM 镜像状态 (`g_nvmBlocks[0..4]`)**：
+    * 5 个块的数据缓存 `data` 全部填充为 `0`。
+    * `valid` 强制标记为 `0x00` (`FALSE`)，`dirty` 强制标记为 `0x00` (`FALSE`)，`dataLen` 清零。
+  * **安全联动测试**：
+    * 再次在 TRACE32 中执行测试用例 2（读取数据块 1）。
+    * 由于数据块 1 镜像的 `valid` 为 `FALSE`，`StmNvm_Read()` 触发安全防错，**`NVM_test_result` 预期显示为 `0x01` (`E_NOT_OK`)**，完美阻止无效数据输出。
 
 ---
 
@@ -166,15 +212,19 @@ ENDDO
      ```orcas
      Var.set NVM_test_flag = 5
      ```
-* **预期结果**：
-  * `NVM_test_flag` 自动清零。
-  * `NVM_test_result` 显示 `0x00` (`E_OK`)。
-  * RAM 镜像及 EEPROM 写入内容更新为：`[0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F]`。
-    > [!TIP]
-    > **查看 Block 2 的 RAM 镜像**：可以在 TRACE32 命令行输入以下命令以结构体展开观测：
-    > ```orcas
-    > Var.View \\stm_nvm\g_nvmBlocks[1]
-    > ```
+* **预期结果（具体变量与存储镜像）**：
+  * **全局调试变量状态**：
+    * `NVM_test_flag` 自动清零恢复为 `0`。
+    * `NVM_test_result` 显示 `0x00` (`E_OK`)。
+  * **RAM 镜像状态 (`g_nvmBlocks[1]`)**：
+    * `data` 前 16 字节被填充为：`[0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F]`。
+    * `dataLen` 成员更新为：`16`（十进制）。
+    * `valid` 标志更新为：`0x01` (`TRUE`)。
+    * `dirty` 标志更新为：`0x01` (`TRUE`)（需要跨核同步）。
+  * **物理 EEPROM 状态（地址偏移 `0x1B` 开始，计算规则：Block 0 占用 10 字节）**：
+    * `0x1B`（Valid）= `0x01`
+    * `0x1C`（Length）= `0x10`（即十进制 16）
+    * `0x1D ~ 0x2C`（Payload）= `0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F`
 
 ---
 
@@ -185,11 +235,12 @@ ENDDO
      ```orcas
      Var.set NVM_test_flag = 6
      ```
-* **预期结果**：
-  * `NVM_test_flag` 自动清零。
-  * `NVM_test_result` 显示 `0x00` (`E_OK`)。
-  * `NVM_test_read_len` 显示为 `16`（十进制）。
-  * `NVM_test_read_buf` 成功获取序列 `0x10` 至 `0x1F` 的全部内容。
+* **预期结果（具体变量）**：
+  * **全局调试变量状态**：
+    * `NVM_test_flag` 自动清零恢复为 `0`。
+    * `NVM_test_result` 显示 `0x00` (`E_OK`)。
+    * `NVM_test_read_len` 显示为 `16`（十进制）。
+    * `NVM_test_read_buf[0..15]` 被精确填充为：`0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F`。
 
 ---
 
@@ -200,10 +251,42 @@ ENDDO
      ```orcas
      Var.set NVM_test_flag = 7
      ```
-* **预期结果**：
-  * 调用 `StmNvm_SetAllValidDirty()`，它将扫描所有配置，把包含有效数据（`valid == TRUE`）的数据块的 `dirty` 标志全部置为 `TRUE`。
-  * 在接下来的主循环 10ms 周期任务中，同步子任务被唤醒，开始通过 IPCF 发送 Method 0x04 同步报文（符合防风暴限制：每个 10ms 周期最多发送 2 个同步包）。
-  * 一旦收到 A 核的响应，`dirty` 标志被清除。可以在调试器中验证所有数据块最终恢复为 clean（干净）状态。
+* **预期结果（以同步 Case 1 写入的数据块 1 为例）**：
+  * **全局调试变量及 RAM 标记**：
+    * `NVM_test_flag` 恢复为 `0`，`NVM_test_result` 显示 `0x00` (`E_OK`)。
+    * 扫描所有有效数据块，由于块 1 和块 2 的 `valid` 为 `TRUE`，对应的脏标志被唤醒置为 `TRUE`（例如 `g_nvmBlocks[0].dirty = 0x01`）。
+  * **IPCF 通道 1 同步发送帧数据（M核Client $\rightarrow$ A核Server）**：
+    * 同步子任务被唤醒。以数据块 1（`dataId = 0x0001`，长度 8 字节）的发送帧为例：
+    * **底层的 8 字节私有 IPC Header**：
+      * `ProviderID` (A核Server) = `0x2F` (47)
+      * `MethodID` (业务Method) = `0x04` (Method 0x04)
+      * `ConsumerID` (M核Client) = `0x2A` (42)
+      * `SessionID` = 自增的唯一 SessionID（假设累加为 `0x15`）
+      * `MessageType` = `0x05` (REQUEST)
+      * `ReturnCode` = `0x00`
+      * `Length` (2B 负载长度) = `0x00 0x0A` (10字节: 2B dataId + 8B data)
+    * **10 字节业务 Payload**：
+      * `dataId` (2B 大端) = `0x00 0x01`
+      * `data` (8B 内容) = `0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x5B, 0x5C`
+    * **单包私有协议数据**：`2F 04 2A 15 05 00 00 0A 00 01 55 56 57 58 59 5A 5B 5C`
+    * **最终网络上传输的物理通道堆叠帧**：
+      * 假设此时通道 Counter 累加为 `0x0012`：
+        `00 2F 04 2A 15 05 00 00 0A 00 01 55 56 57 58 59 5A 5B 5C 00 12 [CRC_H] [CRC_L]`
+  * **IPCF 通道 1 同步接收确认帧数据（A核Server $\rightarrow$ M核Client）**：
+    * A 核收到同步数据后，向 M 核回传 Method 0x04 确认应答报文。
+    * **底层的 8 字节私有 IPC Header**：
+      * `ProviderID` = `0x2F`，`MethodID` = `0x04`，`ConsumerID` = `0x2A`。
+      * `SessionID` = `0x15` (与发送请求完全一致)。
+      * `MessageType` = `0x80` (RESPONSE)
+      * `ReturnCode` = `0x00` (接收成功)
+      * `Length` (2B 负载长度) = `0x00 0x04` (4字节: 2B dataId + 2B status)
+    * **4 字节业务 Payload**：
+      * `dataId` (2B) = `0x00 0x01`
+      * `status` (2B 成功) = `0x00 0x00`
+    * **最终网络上收到的物理通道堆叠应答帧**：
+      * 假设通道接收 Counter 为 `0x0013`：
+        `00 2F 04 2A 15 80 00 00 04 00 01 00 00 00 13 [CRC_H] [CRC_L]`
+  * **同步完成**：M 核比对 `SessionID = 0x15` 响应成功，立刻清除该数据块的脏标志：`g_nvmBlocks[0].dirty = FALSE`。数据块正式恢复为 clean（干净）状态。
 
 ---
 
