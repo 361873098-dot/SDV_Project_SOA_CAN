@@ -1,6 +1,6 @@
 # 存储中间件 (STM) TRACE32 交互式测试指南
 
-本文档描述了如何使用集成在 **S32G399A M7 微控制器** 平台存储中间件 (STM) 模块中的交互式测试框架。通过在 **Lauterbach TRACE32** 调试器中修改全局变量 `NVM_test_flag` 的值（范围 1 到 7），开发人员可以动态执行本地 NVM 读写操作、格式化 EEPROM 持久化存储，并触发跨核（M 核到 A 核）的通信数据验证，而无需重新烧录芯片。
+本文档描述了如何使用集成在 **S32G399A M7 微控制器** 平台存储中间件 (STM) 模块中的交互式测试框架。通过在 **Lauterbach TRACE32** 调试器中修改全局变量 `NVM_test_flag` 的值（范围 1 到 9），开发人员可以动态执行本地 NVM 读写操作、格式化 EEPROM 持久化存储、触发跨核（M 核到 A 核）的通信数据验证，以及直接读取 EEPROM 原始字节进行页边界诊断，而无需重新烧录芯片。
 
 ---
 
@@ -12,7 +12,7 @@ STM 模块向调试器暴露了一组全局变量。这些变量在 `Stm_Main()`
 
 | 变量名称 | 类型 | 作用域 | 用途/说明 |
 | :--- | :--- | :--- | :--- |
-| **`NVM_test_flag`** | `volatile uint8` | 全局变量 | **测试用例选择器**。当设置为非零值（1~7）时触发对应的测试分支。执行完成后会自动重置为 `0`。 |
+| **`NVM_test_flag`** | `volatile uint8` | 全局变量 | **测试用例选择器**。当设置为非零值（1~9）时触发对应的测试分支。执行完成后会自动重置为 `0`。 |
 | **`NVM_test_write_val`** | `uint8` | 全局变量 | 写入测试的**种子值**。写入数据块的数据从此值开始逐字节递增。（默认值：`0xAA`） |
 | **`NVM_test_read_buf[16]`**| `uint8` | 全局变量 | **读取缓冲区**。在读取测试分支中接收来自本地 NVM 的数据。 |
 | **`NVM_test_read_len`** | `uint16` | 全局变量 | **实际读取长度**。指示成功加载 to `NVM_test_read_buf` 中的有效字节数。 |
@@ -71,6 +71,8 @@ PRINT "  - Case 4: 格式化 EEPROM 持久化存储（重新初始化所有数�
 PRINT "  - Case 5: 写入本地数据块 2 (16字节)，使用 NVM_test_write_val 作为种子值"
 PRINT "  - Case 6: 读取本地数据块 2 到 NVM_test_read_buf 中"
 PRINT "  - Case 7: 强制将所有有效数据块标记为 dirty，触发 Method 0x04 同步到 A 核"
+PRINT "  - Case 8: 读取 EEPROM 地址 0x10 的原始 magic byte（页边界诊断）"
+PRINT "  - Case 9: 从 EEPROM 地址 0x10 开始 dump 16 字节原始数据"
 PRINT "=========================================================="
 
 ENDDO
@@ -201,8 +203,9 @@ ENDDO
 
 ---
 
-### 测试用例 5 (NVM_test_flag = 5) ：本地 RAM 与 EEPROM 写入（数据块 2）
-* **测试目的**：验证 NVM 数据块 2（`dataId = 0x0002`，最大长度 16 字节）的分段物理写入安全性。
+### 测试用例 5 (NVM_test_flag = 5) ：本地 RAM 与 EEPROM 写入（数据块 2）+ 自动 Method 0x04 同步到 A 核
+* **测试目的**：验证 NVM 数据块 2（`dataId = 0x0002`，最大长度 16 字节）的分段物理写入安全性，以及写入后 dirty 标记触发的 Method 0x04 跨核同步完整数据流。
+* **前提条件**：M 核与 A 核的跨核通信链路已建立成功，且 STM 状态机处于 `RUNNING`（运行）状态。若未建链，写入仍会成功，但 Method 0x04 不会发送。
 * **操作步骤**：
   1. 设置写入种子值：
      ```orcas
@@ -212,7 +215,12 @@ ENDDO
      ```orcas
      Var.set NVM_test_flag = 5
      ```
-* **预期结果（具体变量与存储镜像）**：
+* **预期结果（具体变量、存储镜像与 IPCF 报文数据流）**：
+
+  #### 阶段一：本地 RAM + EEPROM 写入（Case 5 直接触发）
+
+  由 `Stm_ProcessTest()` → `Stm_WriteLocal(0x0002, tempWriteBuf, 16)` 立即执行：
+
   * **全局调试变量状态**：
     * `NVM_test_flag` 自动清零恢复为 `0`。
     * `NVM_test_result` 显示 `0x00` (`E_OK`)。
@@ -220,11 +228,53 @@ ENDDO
     * `data` 前 16 字节被填充为：`[0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F]`。
     * `dataLen` 成员更新为：`16`（十进制）。
     * `valid` 标志更新为：`0x01` (`TRUE`)。
-    * `dirty` 标志更新为：`0x01` (`TRUE`)（需要跨核同步）。
+    * `dirty` 标志更新为：`0x01` (`TRUE`)（触发下一阶段 Method 0x04 同步）。
   * **物理 EEPROM 状态（地址偏移 `0x1B` 开始，计算规则：Block 0 占用 10 字节）**：
     * `0x1B`（Valid）= `0x01`
     * `0x1C`（Length）= `0x10`（即十进制 16）
     * `0x1D ~ 0x2C`（Payload）= `0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F`
+
+  #### 阶段二：Method 0x04 自动同步到 A 核（下一 10ms 周期触发）
+
+  在 Case 5 执行完毕后的下一个 `Stm_Main()` 10ms 周期中，状态机处于 `RUNNING`，`Stm_ProcessSyncToA()` 检测到 `g_nvmBlocks[1].dirty == TRUE`，自动发起 Method 0x04 请求：
+
+  * **M 核发出数据：M 核 Client（ConsumerID=0x2A）→ A 核 Server（ProviderID=0x2F）**
+  * **业务 Method：Method 0x04（STM_METHOD_M_SYNC_TO_A，M 核同步数据到 A 核）**
+  * **IPCF 通道 1 发送物理帧数据（M核Client $\rightarrow$ A核Server）**：
+    * **底层的 8 字节私有 IPC Header**：
+      * `ProviderID` (A核Server) = `0x2F` (47)
+      * `MethodID` (业务Method) = `0x04` (Method 0x04)
+      * `ConsumerID` (M核Client) = `0x2A` (42)
+      * `SessionID` = 自增的唯一 SessionID（假设累加为 `0x01`）
+      * `MessageType` = `0x05` (REQUEST)
+      * `ReturnCode` = `0x00`
+      * `Length` (2B 负载长度) = `0x00 0x12` (18字节: 2B dataId + 16B data)
+    * **18 字节业务 Payload**：
+      * `dataId` (2B 大端) = `0x00 0x02`
+      * `data` (16B 业务数据) = `0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F`
+    * **单包私有协议数据**：`2F 04 2A 01 05 00 00 12 00 02 10 11 12 13 14 15 16 17 18 19 1A 1B 1C 1D 1E 1F`
+    * **最终网络上传输的物理通道堆叠帧**：
+      * 格式：`[1B CRC使能] [N字节私有包] [2B 通道发送Counter] [2B CRC16]`
+      * 假设此时通道 Counter 累加为 `0x0014`：
+        `00 2F 04 2A 01 05 00 00 12 00 02 10 11 12 13 14 15 16 17 18 19 1A 1B 1C 1D 1E 1F 00 14 [CRC_H] [CRC_L]`
+  * **IPCF 通道 1 接收确认帧数据（A核Server $\rightarrow$ M核Client）**：
+    * A 核收到 Method 0x04 同步数据后，向 M 核回传确认应答。
+    * **底层的 8 字节私有 IPC Header**：
+      * `ProviderID` = `0x2F`，`MethodID` = `0x04`，`ConsumerID` = `0x2A`。
+      * `SessionID` = `0x01` (与请求完全一致)。
+      * `MessageType` = `0x80` (RESPONSE)
+      * `ReturnCode` = `0x00` (接收成功)
+      * `Length` (2B 负载长度) = `0x00 0x04` (4字节: 2B dataId + 2B status)
+    * **4 字节业务 Payload**：
+      * `dataId` (2B) = `0x00 0x02`
+      * `status` (2B 成功) = `0x00 0x00`
+    * **最终网络上收到的物理通道堆叠应答帧**：
+      * 假设通道接收 Counter 为 `0x0015`：
+        `00 2F 04 2A 01 80 00 00 04 00 02 00 00 00 15 [CRC_H] [CRC_L]`
+  * **同步完成**：M 核比对 `SessionID = 0x01` 响应成功，清除脏标志：`g_nvmBlocks[1].dirty = FALSE`。重试状态复位：`Stm_RetryState.active = 0`。
+
+  > [!NOTE]
+  > 如果 A 核未回复 RESPONSE，`Stm_RetryState` 将进入重试流程（100ms → 200ms → 400ms → 800ms，最多 4 次重试），可通过 `Stm_RetryState.active / retryCount / sessionId` 观察追踪。
 
 ---
 
@@ -287,6 +337,104 @@ ENDDO
       * 假设通道接收 Counter 为 `0x0013`：
         `00 2F 04 2A 15 80 00 00 04 00 01 00 00 00 13 [CRC_H] [CRC_L]`
   * **同步完成**：M 核比对 `SessionID = 0x15` 响应成功，立刻清除该数据块的脏标志：`g_nvmBlocks[0].dirty = FALSE`。数据块正式恢复为 clean（干净）状态。
+
+---
+
+### 测试用例 8 (NVM_test_flag = 8) ：EEPROM Magic Byte 原始读取（页边界诊断）
+
+* **测试目的**：直接从 EEPROM 物理地址 `0x10` 读取 1 字节的 Magic Byte 原始值，用于诊断是否存在页边界写入回绕导致 Magic Byte 被覆盖损坏的问题。
+* **背景说明**：
+  * EEPROM 的 Magic Byte 存储在地址 `0x10`（`STM_EEPROM_MAGIC_ADDR = 0x10`），正常值为 `0xA5`（`STM_EEPROM_MAGIC_VALUE`）。
+  * 由于 EEPROM 页大小为 8 字节，地址 `0x10` 是页 2（`0x10~0x17`）的起始地址。如果向地址 `0x18~0x1F`（页 3）写入数据时发生跨页回绕 Bug，Magic Byte 不会被影响。但如果向地址 `0x10~0x17`（页 2）写入超出页边界的数据，回绕会覆盖该页开头，即 Magic Byte 本身。
+  * 该测试绕过 NVM 层，直接调用 `Eeprom_ReadBytes()` 读取原始物理字节，因此即使 NVM 层的 RAM 镜像或格式化状态异常，也能获取到 EEPROM 的真实物理内容。
+* **操作步骤**：
+  1. 触发 Case 8：
+     ```orcas
+     Var.set NVM_test_flag = 8
+     ```
+* **预期结果（具体变量）**：
+  * **全局调试变量状态**：
+    * `NVM_test_flag` 自动清零恢复为 `0`。
+    * `NVM_test_result` 显示 `0x00` (`E_OK`)（读取 I2C 操作成功）。
+    * `NVM_test_read_buf[0]` = Magic Byte 原始值。
+    * `NVM_test_read_len` = `0xA5xx`，其中 `xx` 为读到的 Magic Byte 值（编码格式：高字节固定 `0xA5` 作为标识，低字节为实际读到的值）。
+  * **典型场景判断**：
+
+    | `NVM_test_read_buf[0]` | `NVM_test_read_len` | 含义 |
+    | :--- | :--- | :--- |
+    | `0xA5` | `0xA5A5` | ✅ 正常：Magic Byte 未损坏，EEPROM 已格式化 |
+    | `0x00` | `0xA500` | ⚠️ 未格式化：EEPROM 为出厂空白状态或被擦除 |
+    | `0xFF` | `0xA5FF` | ⚠️ 未格式化：EEPROM 为出厂空白状态（0xFF 填充） |
+    | 其他值 | `0xA5xx` | ❌ 异常：Magic Byte 被覆盖，可能存在页边界回绕 Bug |
+
+  > [!TIP]
+  > **诊断流程**：如果 Case 8 读到非 `0xA5` 值，可先执行 Case 4（格式化 EEPROM）再重新执行 Case 8 验证 Magic Byte 是否被正确写入为 `0xA5`。如果格式化后 Case 8 仍读不到 `0xA5`，则说明 `Eeprom_WriteBytes` 的跨页保护存在 Bug，需要检查底层 I2C 写入时序。
+
+---
+
+### 测试用例 9 (NVM_test_flag = 9) ：EEPROM 原始数据 Dump（Magic + Block[0] 区域）
+
+* **测试目的**：从 EEPROM 物理地址 `0x10` 开始连续读取 16 字节原始数据，将 Magic Byte + Block[0] 的完整存储布局一次性 dump 到 `NVM_test_read_buf` 中，用于直观诊断 EEPROM 的物理存储内容是否正确。
+* **背景说明**：
+  * EEPROM 地址 `0x10~0x1F` 包含：
+    * `0x10`：Magic Byte（应为 `0xA5`）
+    * `0x11`：Block[0] Valid 标志（`0x01` = 已写入，`0x00` = 未写入）
+    * `0x12`：Block[0] 数据长度（例如 `0x08` 表示 8 字节）
+    * `0x13~0x1A`：Block[0] 数据内容（最多 8 字节，取决于 `maxDataLen`）
+    * `0x1B~0x1F`：Block[1] 的 Valid + Length 字段（Block[1] 起始于 `0x1B`，占用 `0x1B~0x2C`）
+  * 该测试绕过 NVM 层的 RAM 镜像，直接读取 EEPROM 的物理内容，适用于验证底层存储一致性。
+* **操作步骤**：
+  1. 触发 Case 9：
+     ```orcas
+     Var.set NVM_test_flag = 9
+     ```
+* **预期结果（具体变量）**：
+
+  * **全局调试变量状态**：
+    * `NVM_test_flag` 自动清零恢复为 `0`。
+    * `NVM_test_result` 显示 `0x00` (`E_OK`)（读取 I2C 操作成功）。
+    * `NVM_test_read_len` = `16`（固定读取 16 字节）。
+    * `NVM_test_read_buf[0..15]` 包含地址 `0x10~0x1F` 的原始字节。
+
+  * **典型场景：已执行 Case 1（写入 Block[0]）+ Case 4（格式化）后的 Dump**：
+
+    假设先执行 Case 4 格式化，再执行 Case 1 写入 `NVM_test_write_val = 0x55`，则 `NVM_test_read_buf` 内容如下：
+
+    | 偏移 | EEPROM 地址 | 字段含义 | 预期值 | 说明 |
+    | :--- | :--- | :--- | :--- | :--- |
+    | `[0]` | `0x10` | Magic Byte | `0xA5` | 格式化写入的标识 |
+    | `[1]` | `0x11` | Block[0] Valid | `0x01` | Case 1 写入后 valid=TRUE |
+    | `[2]` | `0x12` | Block[0] Length | `0x08` | Block[0] 数据长度 8 字节 |
+    | `[3]` | `0x13` | Block[0] Data[0] | `0x55` | 种子值 0x55 |
+    | `[4]` | `0x14` | Block[0] Data[1] | `0x56` | 0x55+1 |
+    | `[5]` | `0x15` | Block[0] Data[2] | `0x57` | 0x55+2 |
+    | `[6]` | `0x16` | Block[0] Data[3] | `0x58` | 0x55+3 |
+    | `[7]` | `0x17` | Block[0] Data[4] | `0x59` | 0x55+4 |
+    | `[8]` | `0x18` | Block[0] Data[5] | `0x5A` | 0x55+5 |
+    | `[9]` | `0x19` | Block[0] Data[6] | `0x5B` | 0x55+6 |
+    | `[10]` | `0x1A` | Block[0] Data[7] | `0x5C` | 0x55+7 |
+    | `[11]` | `0x1B` | Block[1] Valid | `0x00` | Block[1] 未写入 |
+    | `[12]` | `0x1C` | Block[1] Length | `0x00` | Block[1] 无数据 |
+    | `[13]` | `0x1D` | Block[1] Data[0] | `0x00` | 未使用 |
+    | `[14]` | `0x1E` | Block[1] Data[1] | `0x00` | 未使用 |
+    | `[15]` | `0x1F` | Block[1] Data[2] | `0x00` | 未使用 |
+
+  * **典型场景：仅格式化后未写入任何 Block 的 Dump**：
+
+    | 偏移 | EEPROM 地址 | 预期值 | 说明 |
+    | :--- | :--- | :--- | :--- |
+    | `[0]` | `0x10` | `0xA5` | Magic Byte |
+    | `[1]~[15]` | `0x11~0x1F` | `0x00` | 格式化清零的数据区 |
+
+  > [!IMPORTANT]
+  > **与 Case 2 / Case 6 的区别**：Case 2 和 Case 6 是通过 NVM 层（`StmNvm_ReadFromEeprom`）读取，会先检查 `valid` 标志、进行长度校验等安全处理；Case 8 和 Case 9 是直接调用 `Eeprom_ReadBytes` 读取原始物理字节，不经过任何 NVM 层校验，适合做底层硬件级诊断。
+
+  > [!TIP]
+  > **TRACE32 中查看 dump 结果**：执行 Case 9 后，可以在 TRACE32 命令行输入：
+  > ```orcas
+  > Var.View %HEX NVM_test_read_buf
+  > ```
+  > 直接以十六进制查看 16 字节 dump 内容，直观比对 EEPROM 物理布局。
 
 ---
 
