@@ -249,20 +249,32 @@ STM 基于底层高优先级 IPCF 通道 1，在逻辑上注册了 Provider 和 
   PICC MethodType：PICC_METHOD_WITH_RESPONSE
 
 来自 A 核的响应：
-  （应用层自定义；M 核仅检查是否收到了 RESPONSE）
-  - M 核不检查响应中的 ReturnCode
-  - M 核不解析响应 Payload 内容
-  - 任何 RESPONSE（MessageType=0x80）都被视为成功
+  ReturnCode + Payload（应用层自定义格式）
+  
+  M 核响应处理策略（数据完整性优先）：
+  ┌──────────────────────────────┬────────────────────────────────────────────────┐
+  │  A-core response             │  Action                                        │
+  ├──────────────────────────────┼────────────────────────────────────────────────┤
+  │  ReturnCode=0x00 (OK)        │  同步成功：clear dirty, release slot           │
+  │  ReturnCode≠0x00 (NOT_OK)    │  A核拒绝：keep dirty, release slot,            │
+  │                              │  不计入retryCount（A核侧问题，重发同样无意义，  │
+  │                              │  等A核恢复后由下次轮询自动重试）                │
+  │  无响应（超时）               │  keep dirty, retryCount++, 阶梯间隔重试         │
+  │  重试耗尽（retryCount≥MAX）  │  keep dirty, release slot,                     │
+  │                              │  下次轮询扫描自动重试（降级后台补救）           │
+  └──────────────────────────────┴────────────────────────────────────────────────┘
 
 脏标志（dirty）生命周期：
   - StmNvm_Write() 设置 dirty=TRUE，即使 EEPROM 写入成功也保持 TRUE
-  - dirty 仅在 A 核确认接收后由 StmNvm_ClearDirty() 清除
-  - 断开连接时：dirty 标志被清除（放弃待同步数据）
+  - dirty 仅在 A 核确认接收（ReturnCode=0x00）后由 StmNvm_ClearDirty() 清除
+  - A核返回 NOT_OK 或重试耗尽：dirty 保持 TRUE，由下次轮询自动重试
+  - 断开连接时：dirty 标志被清除（放弃待同步数据；重连后一致性检查会重新置脏）
 
 重试逻辑：
   - 同一时间只能有一个 0x04 同步请求在途
   - 阶梯重试间隔：100ms → 200ms → 400ms → 800ms
-  - 最多 4 次重试，超限后放弃（清除 dirty 标志）
+  - 最多 4 次重试（仅超时计为重试；A核拒绝不计入重试次数）
+  - 重试耗尽后：dirty 保持 TRUE，释放 slot，下次轮询自动重试
   - 防风暴：每个 10ms 周期最多发送 2 条同步消息
 ```
 
@@ -449,9 +461,13 @@ Stm_ProcessSyncToA()
      │
      ├── 有正在进行的重试（Stm_RetryState.active）？
      │    │
-     │    ├── retryCount ≥ 4？ → ClearDirty，停止重试
+     │    ├── retryCount ≥ MAX？
+     │    │    └── keep dirty, 释放 slot（下次轮询自动重试）
      │    │
-     │    ├── 收到响应？ → ClearDirty，停止重试
+     │    ├── 收到响应（ReturnCode=0x00）？ → clear dirty, 释放 slot
+     │    │
+     │    ├── 收到响应（ReturnCode≠0x00）？ → keep dirty, 释放 slot
+     │    │                                     （A核拒绝，不计入retryCount）
      │    │
      │    ├── tickCounter < interval[retryCount]？ → 等待
      │    │
@@ -476,7 +492,7 @@ Stm_ProcessSyncToA()
 | 2         | 400ms | 40              |
 | 3         | 800ms | 80              |
 
-最大重试次数：**4 次**。耗尽后 dirty 标志被清除，该数据项被放弃直到下次写入。
+最大重试次数：**4 次**。耗尽后 dirty 标志**保持不变**，释放 slot 让其他 item 继续处理，该数据项将在下次轮询扫描中自动重试（降级后台补救）。
 
 ---
 
@@ -642,7 +658,7 @@ A 核发送 Method 0x02：[0x00][0x01][8 字节数据]
 | 2   | Method 0x03（M 核从 A 核同步读取） | **未完全实现** | 当前仅使用 0x05（异步）；0x03 响应解析待实现                                                |
 | 3   | 读取请求超时                       | **已实现**     | 如果 A 核始终不响应，请求将保持挂起直到断开连接                                             |
 | 4   | EEPROM 写入错误恢复                | **基础**       | 返回 E_NOT_OK 但不重试 EEPROM 写入                                                          |
-| 5   | Method 0x04 最大重试后             | **放弃**       | dirty 标志被清除；同步数据丢失直到下次写入                                                  |
+| 5   | Method 0x04 最大重试后             | **降级重试**   | dirty 标志保持不变，释放 slot，下次轮询自动重试（不丢弃数据）                              |
 | 6   | 多个并发同步请求                   | **不支持**     | 同一时间只能有一个 0x04 同步在途                                                            |
 
 ---

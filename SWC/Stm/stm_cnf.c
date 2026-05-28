@@ -35,8 +35,8 @@
 *  Current total: (2+8) + (2+16) + (2+4) + (2+12) + (2+8) = 58 <= 64
 ***********************************************************************************************************************/
 const Stm_DataItemCfg_t g_StmDataItemCfg[STM_MAX_DATA_ITEMS] = {
-    { 0x0001U,  8U  },  /* Item 1: e.g. calibration data */
-    { 0x0002U, 16U  },  /* Item 2: e.g. config block */
+    { 0x1100U,  18U  },  /* Item 1: e.g. calibration data */
+    { 0x0002U, 4U  },  /* Item 2: e.g. config block */
     { 0x0003U,  4U  },  /* Item 3: e.g. status flags */
     { 0x0004U, 12U  },  /* Item 4: e.g. sensor offsets */
     { 0x0005U,  8U  },  /* Item 5: e.g. runtime params */
@@ -103,13 +103,13 @@ void Stm_ProcessTest(void)
             {
                 tempWriteBuf[i] = (uint8)(NVM_test_write_val + i);
             }
-            NVM_test_result = Stm_WriteLocal(0x0001U, tempWriteBuf, 8U);
+            NVM_test_result = Stm_WriteLocal(g_StmDataItemCfg[0].dataId, tempWriteBuf, 8U);
             break;
 
         case 2U:
             /* Case 2: Read data from Item 1 (dataId=0x0001) directly from EEPROM */
             (void)memset(NVM_test_read_buf, 0, sizeof(NVM_test_read_buf));
-            NVM_test_result = StmNvm_ReadFromEeprom(0x0001U, NVM_test_read_buf, sizeof(NVM_test_read_buf), &NVM_test_read_len);
+            NVM_test_result = StmNvm_ReadFromEeprom(g_StmDataItemCfg[0].dataId, NVM_test_read_buf, sizeof(NVM_test_read_buf), &NVM_test_read_len);
             break;
 
         case 3U:

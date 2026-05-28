@@ -296,13 +296,20 @@ static void Stm_ProcessRxFromA(void)
 *  Only one sync can be in-flight at a time. Retry logic with stepped intervals
 *  handles temporary communication failures.
 *
-*  Retry flow:
-*  1. Find next dirty block via round-robin scan
-*  2. Send Method 0x04 request (2B dataId + data)
-*  3. Wait for response; if received, clear dirty flag
-*  4. If no response within interval, retry with stepped delay:
-*     100ms -> 200ms -> 400ms -> 800ms (4 retries max)
-*  5. After max retries exhausted, give up on this item (clear dirty)
+*  Response handling strategy (data integrity first):
+*  ┌──────────────────────────────────────────────────────────────────┐
+*  │  A-core response          │  Action                            │
+*  ├───────────────────────────┼────────────────────────────────────┤
+*  │  ReturnCode=0x00 (OK)     │  clear dirty, release slot        │
+*  │  ReturnCode≠0x00 (NOT_OK) │  keep dirty, release slot,        │
+*  │                           │  do NOT count as retry attempt     │
+*  │                           │  (A-core rejected, retry is futile │
+*  │                           │  until A-core side recovers)       │
+*  │  No response (timeout)    │  keep dirty, retryCount++,         │
+*  │                           │  stepped retry (100->200->400->800)│
+*  │  Max retries exhausted    │  keep dirty, release slot,         │
+*  │                           │  next round-robin scan will retry  │
+*  └──────────────────────────────────────────────────────────────────┘
 *
 *  Anti-storm: Max STM_SYNC_MAX_PER_CYCLE (2) sync messages per 10ms cycle.
 ***********************************************************************************************************************/
@@ -314,28 +321,55 @@ static void Stm_ProcessSyncToA(void)
     uint16 syncLen;
     uint16 payloadLen;
     uint8 sessionId;
+    uint8 syncReturnCode;
 
     /* --- Handle ongoing retry if a sync is already in-flight --- */
     if (Stm_RetryState.active != 0U)
     {
         if (Stm_RetryState.retryCount >= STM_RETRY_MAX_COUNT)
         {
-            /* Max retries exhausted - give up on this item to avoid blocking
-             * other items. The dirty flag is cleared so this item won't be
-             * retried until it is written again. */
-            StmNvm_ClearDirty(Stm_RetryState.dataId);
+            /* Max retries exhausted - release slot so other items can proceed.
+             * IMPORTANT: Do NOT clear dirty flag! The data has NOT been
+             * successfully synced to A-core. Clearing dirty would cause
+             * silent data loss. The item will be picked up again by the next
+             * round-robin scan via StmNvm_GetSyncableItem(). This provides
+             * "degraded background retry" - the system moves forward but
+             * continues attempting to sync this item. */
             Stm_RetryState.active = 0U;
             return;
         }
 
         /* Check if A-core has responded to our sync request (precise sessionId matching) */
         if (PICC_GetResponseData(PICC_APP_STM_CLI, STM_METHOD_M_SYNC_TO_A,
-                                 Stm_RetryState.sessionId, NULL, s_syncBuf, sizeof(s_syncBuf), &syncLen,
+                                 Stm_RetryState.sessionId, &syncReturnCode,
+                                 s_syncBuf, sizeof(s_syncBuf), &syncLen,
                                  NULL, NULL) == PICC_E_OK)
         {
-            /* Response received from A-core - sync successful */
-            StmNvm_ClearDirty(Stm_RetryState.dataId);
-            Stm_RetryState.active = 0U;
+            if (syncReturnCode == (uint8)PICC_RET_OK)
+            {
+                /* A-core protocol layer accepted the request - sync successful.
+                 * Dirty flag is cleared because A-core has confirmed receipt. */
+                StmNvm_ClearDirty(Stm_RetryState.dataId);
+                Stm_RetryState.active = 0U;
+            }
+            else
+            {
+                /* A-core protocol layer rejected (ReturnCode != 0x00).
+                 * This means A-core received the message but refused it
+                 * (e.g. internal error, not ready, resource exhausted).
+                 *
+                 * Key design decision: Do NOT count this as a retry attempt.
+                 * A-core rejection is typically a persistent condition (config
+                 * mismatch, resource exhaustion). Retrying immediately with
+                 * the same data is unlikely to succeed until A-core recovers.
+                 * The slot is released so other dirty items can proceed,
+                 * and this item will be retried in the next round-robin scan.
+                 *
+                 * Reset retryCount so that when this item is picked up again,
+                 * it starts with a fresh retry budget rather than being close
+                 * to max retries from previous failed attempts. */
+                Stm_RetryState.active = 0U;
+            }
             return;
         }
 
@@ -419,11 +453,14 @@ static void Stm_ProcessSyncToA(void)
 *
 *  Only one read request can be pending at a time (Stm_PendingReadReq).
 *  Response matching uses the session ID returned by PICC_MethodRequest.
+ *  Both the PICC response returnCode and the STM payload status must be OK
+ *  before returned data is accepted into local NVM.
 ***********************************************************************************************************************/
 static void Stm_ProcessAppReadReq(void)
 {
     static uint8 s_readRspBuf[STM_NVM_BLOCK_MAX_SIZE + 4U]; /* static to avoid stack overflow */
     uint16 rspLen;
+    uint8 readReturnCode;
 
     if (Stm_PendingReadReq.active == 0U)
     {
@@ -432,45 +469,49 @@ static void Stm_ProcessAppReadReq(void)
 
     /* Poll for response from A-core matching the pending request's session ID */
     if (PICC_GetResponseData(PICC_APP_STM_CLI, Stm_PendingReadReq.methodId,
-                             Stm_PendingReadReq.sessionId, NULL,
+                             Stm_PendingReadReq.sessionId, &readReturnCode,
                              s_readRspBuf, sizeof(s_readRspBuf), &rspLen,
                              NULL, NULL) == PICC_E_OK)
     {
-        /* Response received from A-core - parse and write to local NVM */
-        if (Stm_PendingReadReq.methodId == STM_METHOD_M_ASYNC_READ)
+        if (readReturnCode == (uint8)PICC_RET_OK)
         {
-            /* Method 0x05 response format: 2B dataId + 2B status + data
-             * Minimum valid payload: 4 bytes (2B dataId + 2B status) */
-            if ((rspLen >= 4U) && (s_readRspBuf[2] == 0x00U) && (s_readRspBuf[3] == 0x00U))
+            /* Response received from A-core - parse and write to local NVM */
+            if (Stm_PendingReadReq.methodId == STM_METHOD_M_ASYNC_READ)
             {
-                /* Status = 0x0000 (OK): write returned data to local NVM */
-                uint16 rspDataId = ((uint16)s_readRspBuf[0] << 8U) | (uint16)s_readRspBuf[1];
-                uint16 rspDataLen = rspLen - 4U;
-
-                if (rspDataLen > 0U)
+                /* Method 0x05 response format: 2B dataId + 2B status + data
+                 * Minimum valid payload: 4 bytes (2B dataId + 2B status) */
+                if ((rspLen >= 4U) && (s_readRspBuf[2] == 0x00U) && (s_readRspBuf[3] == 0x00U))
                 {
-                    (void)StmNvm_WriteFromA(rspDataId, &s_readRspBuf[4], rspDataLen);
+                    /* Status = 0x0000 (OK): write returned data to local NVM */
+                    uint16 rspDataId = ((uint16)s_readRspBuf[0] << 8U) | (uint16)s_readRspBuf[1];
+                    uint16 rspDataLen = rspLen - 4U;
+
+                    if (rspDataLen > 0U)
+                    {
+                        (void)StmNvm_WriteFromA(rspDataId, &s_readRspBuf[4], rspDataLen);
+                    }
                 }
+                /* else: payload status != 0x0000 (NOT_OK) or payload too short - discard */
             }
-            /* else: status != 0x0000 (NOT_OK) or payload too short - discard */
-        }
-        else
-        {
-            /* Method 0x03 response format: 2B dataId + 2B status + data
-             * Minimum valid payload: 4 bytes (2B dataId + 2B status) */
-            if ((rspLen >= 4U) && (s_readRspBuf[2] == 0x00U) && (s_readRspBuf[3] == 0x00U))
+            else
             {
-                /* Status = 0x0000 (OK): write returned data to local NVM */
-                uint16 rspDataId = ((uint16)s_readRspBuf[0] << 8U) | (uint16)s_readRspBuf[1];
-                uint16 rspDataLen = rspLen - 4U;
-
-                if (rspDataLen > 0U)
+                /* Method 0x03 response format: 2B dataId + 2B status + data
+                 * Minimum valid payload: 4 bytes (2B dataId + 2B status) */
+                if ((rspLen >= 4U) && (s_readRspBuf[2] == 0x00U) && (s_readRspBuf[3] == 0x00U))
                 {
-                    (void)StmNvm_WriteFromA(rspDataId, &s_readRspBuf[4], rspDataLen);
+                    /* Status = 0x0000 (OK): write returned data to local NVM */
+                    uint16 rspDataId = ((uint16)s_readRspBuf[0] << 8U) | (uint16)s_readRspBuf[1];
+                    uint16 rspDataLen = rspLen - 4U;
+
+                    if (rspDataLen > 0U)
+                    {
+                        (void)StmNvm_WriteFromA(rspDataId, &s_readRspBuf[4], rspDataLen);
+                    }
                 }
+                /* else: payload status != 0x0000 (NOT_OK) or payload too short - discard */
             }
-            /* else: status != 0x0000 (NOT_OK) or payload too short - discard */
         }
+        /* else: PICC returnCode != OK - discard response payload */
 
         /* Mark request as completed - application can issue new requests */
         Stm_PendingReadReq.active = 0U;

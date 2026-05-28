@@ -17,14 +17,13 @@
 *  Date:                $Date: 2026/05/25  $
 *
 *  Description:     Storage Middleware NVM management implementation
-*                   EEPROM persistence + RAM mirror with segmented I2C writes
+*                   EEPROM persistence + RAM mirror with EEPROM driver page splitting
 *
 *  Architecture:
 *    - Each data item has a RAM mirror (Stm_NvmBlock_t) for zero-latency reads.
 *    - EEPROM stores persistent data at computed offsets within the data area.
 *    - EEPROM layout per block: [valid(1B)][len(1B)][data(maxDataLen)]
-*    - Writes to EEPROM are segmented (max EEPROM_WRITE_MAX_LEN bytes per I2C transfer)
-*      to comply with I2C transaction size limits of the EEPROM driver.
+*    - EEPROM page boundary splitting is handled by the EEPROM driver.
 *    - On init, EEPROM magic byte (0xA5) is checked. If invalid, the entire
 *      EEPROM data area is formatted (all zeros) and RAM mirror is cleared.
 *
@@ -204,17 +203,13 @@ static Std_ReturnType StmNvm_ReadBlockFromEeprom(uint16 index)
 }
 
 /**
- * @brief Write one data block from RAM mirror to EEPROM (segmented)
+ * @brief Write one data block from RAM mirror to EEPROM
  *
  * Writes the block in two phases:
  *   1. Header: valid(1B) + len(1B)
- *   2. Data: written in segments of EEPROM_WRITE_MAX_LEN (16) bytes each
+ *   2. Data: written in one call to the EEPROM driver
  *
- * Segmented writes are required because the I2C EEPROM driver has a
- * maximum transaction size per I2C write operation.
- *
- * Note: s_writeBuf is declared static to avoid placing large buffers
- * on the stack (important for FreeRTOS tasks with limited stack space).
+ * Page boundary splitting is handled inside Eeprom_WriteBytes().
  *
  * @param index  Block index in g_nvmBlocks array
  * @return E_OK on success, E_NOT_OK on EEPROM write failure
@@ -224,54 +219,33 @@ static Std_ReturnType StmNvm_WriteBlockToEeprom(uint16 index)
     Std_ReturnType ret;
     uint8 eepromAddr;
     uint16 dataOffset;
-    uint16 bytesRemaining;
-    uint16 writeOffset;
-    static uint8 s_writeBuf[EEPROM_WRITE_MAX_LEN]; /* static to avoid stack overflow */
+    uint8 headerBuf[2U];
 
     dataOffset = g_nvmBlocks[index].eepromOffset;
 
     /* Phase 1: Write valid + len header */
     eepromAddr = (uint8)(STM_EEPROM_DATA_START_ADDR + dataOffset);
-    s_writeBuf[0] = g_nvmBlocks[index].valid;
-    s_writeBuf[1] = (uint8)g_nvmBlocks[index].dataLen;
+    headerBuf[0] = g_nvmBlocks[index].valid;
+    headerBuf[1] = (uint8)g_nvmBlocks[index].dataLen;
 
     NVM_test_read_len = 0U;
-    ret = Eeprom_WriteBytes(eepromAddr, s_writeBuf, 2U);
+    ret = Eeprom_WriteBytes(eepromAddr, headerBuf, 2U);
     if (ret != E_OK)
     {
         NVM_test_read_len = 300U + index;
         return E_NOT_OK;
     }
 
-    /* Phase 2: Write data payload in segments of EEPROM_WRITE_MAX_LEN */
-    bytesRemaining = g_nvmBlocks[index].dataLen;
-    writeOffset = 0U;
-
-    while (bytesRemaining > 0U)
+    /* Phase 2: Write data payload. The EEPROM driver splits writes at page boundaries. */
+    if (g_nvmBlocks[index].dataLen > 0U)
     {
-        uint16 chunkLen;
-        uint16 i;
-
-        /* Determine chunk size: min(remaining, max I2C write size) */
-        chunkLen = (bytesRemaining > EEPROM_WRITE_MAX_LEN) ? EEPROM_WRITE_MAX_LEN : bytesRemaining;
-
-        /* Copy chunk from RAM mirror to write buffer */
-        for (i = 0U; i < chunkLen; i++)
-        {
-            s_writeBuf[i] = g_nvmBlocks[index].data[writeOffset + i];
-        }
-
-        /* Write chunk to EEPROM at the correct offset */
-        eepromAddr = (uint8)(STM_EEPROM_DATA_START_ADDR + dataOffset + 2U + writeOffset);
-        ret = Eeprom_WriteBytes(eepromAddr, s_writeBuf, (uint16)chunkLen);
+        eepromAddr = (uint8)(STM_EEPROM_DATA_START_ADDR + dataOffset + 2U);
+        ret = Eeprom_WriteBytes(eepromAddr, g_nvmBlocks[index].data, g_nvmBlocks[index].dataLen);
         if (ret != E_OK)
         {
             NVM_test_read_len = 400U + index;
             return E_NOT_OK;
         }
-
-        writeOffset += chunkLen;
-        bytesRemaining -= chunkLen;
     }
 
     NVM_test_read_len = 0x55AAU;
@@ -482,7 +456,7 @@ Std_ReturnType StmNvm_ReadFromEeprom(uint16 dataId, uint8 *data, uint16 maxLen, 
  * Steps:
  * 1. Validate dataId and input parameters
  * 2. Copy data to RAM mirror and mark as valid + dirty
- * 3. Write to EEPROM (segmented)
+ * 3. Write to EEPROM (page splitting is handled by the EEPROM driver)
  * 4. Clear dirty flag after successful EEPROM write
  */
 Std_ReturnType StmNvm_Write(uint16 dataId, const uint8 *data, uint16 len)

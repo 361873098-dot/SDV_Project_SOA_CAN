@@ -117,7 +117,7 @@ volatile uint8 exit_code;
 
 /** Diagnostic record buffer: 20 rows × 30 bytes per row */
 #define PICC_DIAG_RECORD_ROWS       (30U)
-#define PICC_DIAG_RECORD_COLS       (15U)
+#define PICC_DIAG_RECORD_COLS       (30U)
 
 /** Diagnostic record structure */
 typedef struct {
