@@ -193,7 +193,7 @@ uint8 PICC_MethodRequest(PICC_AppIndex_e appIndex, uint8 methodId,
         return 0U;
     }
 
-    return PICC_ServiceMethodSend(cfg->remoteId, methodId, data, len, type,
+    return PICC_ServiceMethodSend(cfg->remoteId, cfg->localId, methodId, data, len, type,
                                   IPCF_INSTANCE0, cfg->channelId);
 }
 

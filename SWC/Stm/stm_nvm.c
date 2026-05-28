@@ -242,7 +242,6 @@ static Std_ReturnType StmNvm_WriteBlockToEeprom(uint16 index)
         NVM_test_read_len = 300U + index;
         return E_NOT_OK;
     }
-    StmNvm_DelayMs(10U);  /* t_WR: wait 10ms for EEPROM to complete physical write cycle */
 
     /* Phase 2: Write data payload in segments of EEPROM_WRITE_MAX_LEN */
     bytesRemaining = g_nvmBlocks[index].dataLen;
@@ -270,7 +269,6 @@ static Std_ReturnType StmNvm_WriteBlockToEeprom(uint16 index)
             NVM_test_read_len = 400U + index;
             return E_NOT_OK;
         }
-        StmNvm_DelayMs(10U);  /* t_WR: wait 10ms for EEPROM to complete physical write cycle */
 
         writeOffset += chunkLen;
         bytesRemaining -= chunkLen;
@@ -642,7 +640,6 @@ Std_ReturnType StmNvm_FormatEeprom(void)
         NVM_test_read_len = 100U;
         return E_NOT_OK;
     }
-    StmNvm_DelayMs(10U);  /* t_WR: wait 10ms for EEPROM to complete physical write cycle */
 
     /* Step 2: Clear all data blocks in EEPROM (write zeros) */
     (void)memset(zeroBuf, 0, sizeof(zeroBuf));
@@ -667,7 +664,6 @@ Std_ReturnType StmNvm_FormatEeprom(void)
                 NVM_test_read_len = 200U + i;
                 return E_NOT_OK;
             }
-            StmNvm_DelayMs(10U);  /* t_WR: wait 10ms for EEPROM to complete physical write cycle */
 
             writeOffset += chunkLen;
             bytesRemaining -= chunkLen;

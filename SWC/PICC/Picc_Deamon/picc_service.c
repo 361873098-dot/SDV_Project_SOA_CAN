@@ -416,7 +416,7 @@ sint8 PICC_ServiceEventSend(uint8 providerId, uint8 eventId, uint8 consumerId,
 /**
  * @brief Send Method request (Client role)
  */
-uint8 PICC_ServiceMethodSend(uint8 providerId, uint8 methodId,
+uint8 PICC_ServiceMethodSend(uint8 providerId, uint8 consumerId, uint8 methodId,
                              const uint8 *data, uint16 len,
                              PICC_MethodType_e type,
                              uint8 instanceId, uint8 channelId)
@@ -436,7 +436,7 @@ uint8 PICC_ServiceMethodSend(uint8 providerId, uint8 methodId,
 
     header.providerId = providerId;
     header.methodId   = methodId;
-    header.consumerId = 0U;  /* Set by caller at higher layer */
+    header.consumerId = consumerId;
     header.sessionId  = sessionId;
     header.returnCode = (uint8)PICC_RET_OK;
 

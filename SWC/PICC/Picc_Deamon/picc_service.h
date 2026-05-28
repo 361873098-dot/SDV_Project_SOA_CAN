@@ -122,13 +122,14 @@ void PICC_ServiceLayerDeinit(void);
  * @brief Send Method request (Client role)
  * 
  * @param[in] providerId Service provider ID
+ * @param[in] consumerId Local client's Consumer ID
  * @param[in] methodId   Method ID
  * @param[in] data       Request data
  * @param[in] len        Request data length
  * @param[in] type       Method type
  * @return Session ID (>0), returns 0 on failure
  */
-uint8 PICC_ServiceMethodSend(uint8 providerId, uint8 methodId,
+uint8 PICC_ServiceMethodSend(uint8 providerId, uint8 consumerId, uint8 methodId,
                              const uint8 *data, uint16 len,
                              PICC_MethodType_e type,
                              uint8 instanceId, uint8 channelId);

@@ -183,10 +183,10 @@ Std_ReturnType Eeprom_WriteBytes(uint8 address, uint8 *data, uint16 length)
         offset += chunkLen;
 
         /* Wait for EEPROM internal write cycle (t_WR = 5~10ms typical).
-         * This delay is needed between page writes because the EEPROM
-         * will NACK any I2C access during its internal write cycle.
-         * We only add the delay if there are more chunks to write. */
-        if (offset < length)
+         * ALWAYS delay after every page write, including the last one.
+         * This ensures the EEPROM has completed its physical write
+         * before this function returns, so callers do NOT need to add
+         * their own t_WR delay. */
         {
             volatile uint32 count;
             uint32 i;
