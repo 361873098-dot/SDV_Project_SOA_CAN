@@ -175,7 +175,7 @@ STM 基于底层高优先级 IPCF 通道 1，在逻辑上注册了 Provider 和 
 | `WAIT_LINK`        | 初始化后或链路断开后 | 无（PICC 自动处理链路请求）                    | Provider + Consumer 链路均连接成功 $\rightarrow$ `WAIT_CONSISTENCY`       |
 | `WAIT_CONSISTENCY` | 链路建立             | 链路活性监测 + 轮询 Method 0x01 请求           | 收到 A 核 0x01 请求且 payload 为 `0x0000` $\rightarrow$ 回应 0x0000 成功，将本地有效块全部置脏，跳转至 `SYNC_TO_A` |
 | `SYNC_TO_A`        | 一致性检查通过       | 链路活性监测 + `Stm_ProcessSyncToA()` (0x04)   | 所有脏数据（0x04）均发送完毕且当前无在途重试 $\rightarrow$ `RUNNING`      |
-| `RUNNING`          | 所有数据已同步       | 链路活性监测 + 4 个子任务全部活跃              | 链路断开（心跳检测超时或收到断开连接通知） $\rightarrow$ `WAIT_LINK`      |
+| `RUNNING`          | 所有数据已同步       | 链路活性监测 + 4 个子任务全部活跃（含周期性 0x01 一致性检查处理） | 链路断开（心跳检测超时或收到断开连接通知） $\rightarrow$ `WAIT_LINK`      |
 
 ### 3.3 断开连接时的状态重置
 
@@ -251,30 +251,44 @@ STM 基于底层高优先级 IPCF 通道 1，在逻辑上注册了 Provider 和 
 来自 A 核的响应：
   ReturnCode + Payload（应用层自定义格式）
   
-  M 核响应处理策略（数据完整性优先）：
+  M 核响应处理策略（协议 §2.2.2）：
   ┌──────────────────────────────┬────────────────────────────────────────────────┐
   │  A-core response             │  Action                                        │
   ├──────────────────────────────┼────────────────────────────────────────────────┤
-  │  ReturnCode=0x00 (OK)        │  同步成功：clear dirty, release slot           │
-  │  ReturnCode≠0x00 (NOT_OK)    │  A核拒绝：keep dirty, release slot,            │
-  │                              │  不计入retryCount（A核侧问题，重发同样无意义，  │
-  │                              │  等A核恢复后由下次轮询自动重试）                │
-  │  无响应（超时）               │  keep dirty, retryCount++, 阶梯间隔重试         │
-  │  重试耗尽（retryCount≥MAX）  │  keep dirty, release slot,                     │
-  │                              │  下次轮询扫描自动重试（降级后台补救）           │
+  │  ReturnCode=OK               │  同步成功：clear dirty, release slot           │
+  │  + payload 状态 OK           │                                                │
+  │  ReturnCode=OK               │  retryCount++，阶梯间隔退避重试                │
+  │  + payload 状态 NOT_OK       │  (100→200→400→800ms)                           │
+  │  ReturnCode≠OK               │  retryCount++，阶梯间隔退避重试                │
+  │  (NOT_OK / NOT_READY)        │                                                │
+  │  无响应（超时）               │  retryCount++，阶梯间隔退避重试                 │
+  │  重试耗尽（retryCount≥MAX）  │  判定为失败：clear dirty + release slot。       │
+  │                              │  本周期不再重新选取该块，避免每 10ms 风暴式      │
+  │                              │  重发。由 A 核周期性一致性检查 (0x01) 重新置脏   │
+  │                              │  并触发新一轮同步。                            │
   └──────────────────────────────┴────────────────────────────────────────────────┘
+
+成功判定（数据完整性）：
+  - 主信号：协议层 ReturnCode（IPC 头）== PICC_RET_OK
+  - 副信号：payload 业务状态 == 0x0000，解析兼容两种编码：
+      · len≥4：[dataId_H][dataId_L][status_H][status_L]（回显 dataId）
+      · len=2..3：[status_H][status_L]（仅状态，对应协议 §2.1 "响应 payload：2字节状态"）
+      · len<2：无业务状态，以 ReturnCode 为准
 
 脏标志（dirty）生命周期：
   - StmNvm_Write() 设置 dirty=TRUE，即使 EEPROM 写入成功也保持 TRUE
-  - dirty 仅在 A 核确认接收（ReturnCode=0x00）后由 StmNvm_ClearDirty() 清除
-  - A核返回 NOT_OK 或重试耗尽：dirty 保持 TRUE，由下次轮询自动重试
+  - dirty 在 A 核确认接收（ReturnCode=OK 且业务状态 OK）后由 StmNvm_ClearDirty() 清除
+  - 重试耗尽（判定失败）：dirty 被清除（放弃本次同步），由一致性检查重新置脏后重试
   - 断开连接时：dirty 标志被清除（放弃待同步数据；重连后一致性检查会重新置脏）
 
 重试逻辑：
   - 同一时间只能有一个 0x04 同步请求在途
   - 阶梯重试间隔：100ms → 200ms → 400ms → 800ms
-  - 最多 4 次重试（仅超时计为重试；A核拒绝不计入重试次数）
-  - 重试耗尽后：dirty 保持 TRUE，释放 slot，下次轮询自动重试
+  - 最多 4 次重试（超时与 A 核失败响应均计入重试）
+  - 重试耗尽后：判定失败，clear dirty 释放 slot；不在本周期立即重发（防风暴）
+  - 恢复路径：A 核周期性发送的 0x01 一致性检查会调用 StmNvm_SetAllValidDirty()，
+    将所有有效块重新置脏并重新发起 0x04 同步。这样即便 A 核持续拒绝，重发频率
+    也被限制在一致性检查周期，而不是每 10ms 一次。
   - 防风暴：每个 10ms 周期最多发送 2 条同步消息
 ```
 
@@ -437,7 +451,9 @@ StmNvm_Read()
 #### 5.8.4 脏标志 (dirty) 的状态与生命周期
 `dirty` 标志作为 M 核和 A 核之间**非对称数据同步**的关键媒介，其状态流转遵循严格的规则：
 1.  **本地写入 (M->EEPROM)**：应用层调用 `Stm_WriteLocal()` 时，数据拷贝至 RAM，`dirty` 标志置为 `TRUE`，随即开始物理 EEPROM 持久化。当 EEPROM 写入成功后，**`dirty` 标志依然保持 `TRUE`**，以表明该数据虽然在本地完成了持久化，但尚未通过 Method 0x04 发送到 A 核。
-2.  **跨核同步完成 (Method 0x04 成功)**：在 `Stm_ProcessSyncToA()` 轮询中成功将脏块数据发送给 A 核并接收到 A 核的响应后，调用 `StmNvm_ClearDirty()` 将 `dirty` 标志置为 `FALSE`。
+2.  **跨核同步完成 (Method 0x04 成功)**：在 `Stm_ProcessSyncToA()` 轮询中成功将脏块数据发送给 A 核，并接收到 A 核响应（协议层 `ReturnCode=OK` **且**业务状态 `0x0000`）后，调用 `StmNvm_ClearDirty()` 将 `dirty` 标志置为 `FALSE`。
+
+    **同步失败处理（防风暴）**：若超时或 A 核返回失败，按阶梯间隔（100→200→400→800ms）最多重试 4 次。**重试全部耗尽后判定为失败**，同样调用 `StmNvm_ClearDirty()` 清除该块脏标志并释放在途 slot。这一点至关重要：若耗尽后仍保留 `dirty=TRUE`，轮询扫描会在下一个 10ms 周期立即重新选中该块并再次发起 `PICC_MethodRequest`，在 A 核持续返回错误数据/非 OK 时形成无限风暴。判定失败后的重新同步交由 A 核**周期性一致性检查（Method 0x01）**驱动——`Stm_HandleConsistencyCheck()` 在收到合法 0x01 后调用 `StmNvm_SetAllValidDirty()` 重新置脏，从而把重发频率限制在一致性检查周期。
 3.  **A 核主动覆写 (WriteFromA)**：当 A 核通过 Method 0x02 主动向 M 核写入数据时，由于这本就源自 A 核，因此 M 核在将数据成功存入 RAM + EEPROM 后，**会立即显式清除脏标志（`dirty = FALSE`）**，防止产生不必要的 Method 0x04 同步回传。
 4.  **断开连接 (ResetOnDisconnect)**：如果链路断开或心跳超时，为了防止重连时数据流向紊乱，M 核会调用 `StmNvm_ResetOnDisconnect()` **强制将所有 Block 的 `dirty` 标志清零**（放弃先前未完成的同步请求），但 RAM 镜像与 EEPROM 物理存储中的本地数据依然保持有效。
 
@@ -462,16 +478,16 @@ Stm_ProcessSyncToA()
      ├── 有正在进行的重试（Stm_RetryState.active）？
      │    │
      │    ├── retryCount ≥ MAX？
-     │    │    └── keep dirty, 释放 slot（下次轮询自动重试）
+     │    │    └── 判定失败：clear dirty + 释放 slot（不立即重选，等一致性检查）
      │    │
-     │    ├── 收到响应（ReturnCode=0x00）？ → clear dirty, 释放 slot
-     │    │
-     │    ├── 收到响应（ReturnCode≠0x00）？ → keep dirty, 释放 slot
-     │    │                                     （A核拒绝，不计入retryCount）
+     │    ├── 收到响应？
+     │    │    ├── ReturnCode=OK 且 payload 状态 OK → clear dirty, 释放 slot
+     │    │    └── 否则（ReturnCode≠OK / 状态 NOT_OK / payload 无效）
+     │    │            → retryCount++, tickCounter=0（计入重试，阶梯退避）
      │    │
      │    ├── tickCounter < interval[retryCount]？ → 等待
      │    │
-     │    └── 间隔时间到？ → 重新发送，retryCount++
+     │    └── 间隔时间到？ → retryCount++, 重新发送
      │
      ├── 防风暴：syncCount ≥ 2？ → 跳过本周期
      │
@@ -492,7 +508,7 @@ Stm_ProcessSyncToA()
 | 2         | 400ms | 40              |
 | 3         | 800ms | 80              |
 
-最大重试次数：**4 次**。耗尽后 dirty 标志**保持不变**，释放 slot 让其他 item 继续处理，该数据项将在下次轮询扫描中自动重试（降级后台补救）。
+最大重试次数：**4 次**（超时与 A 核失败响应均计入）。耗尽后**判定为失败**：清除该块 dirty 标志并释放 slot，本周期不再立即重选同一块以避免每 10ms 风暴式重发。本地 RAM/EEPROM 数据始终保留，重新同步由 A 核**周期性一致性检查（0x01）**触发（`StmNvm_SetAllValidDirty()` 重新置脏）。
 
 ---
 
@@ -658,7 +674,7 @@ A 核发送 Method 0x02：[0x00][0x01][8 字节数据]
 | 2   | Method 0x03（M 核从 A 核同步读取） | **未完全实现** | 当前仅使用 0x05（异步）；0x03 响应解析待实现                                                |
 | 3   | 读取请求超时                       | **已实现**     | 如果 A 核始终不响应，请求将保持挂起直到断开连接                                             |
 | 4   | EEPROM 写入错误恢复                | **基础**       | 返回 E_NOT_OK 但不重试 EEPROM 写入                                                          |
-| 5   | Method 0x04 最大重试后             | **降级重试**   | dirty 标志保持不变，释放 slot，下次轮询自动重试（不丢弃数据）                              |
+| 5   | Method 0x04 最大重试后             | **判定失败**   | 清除 dirty 释放 slot（防 10ms 风暴），本地数据保留；由周期性一致性检查 0x01 重新置脏并重试 |
 | 6   | 多个并发同步请求                   | **不支持**     | 同一时间只能有一个 0x04 同步在途                                                            |
 
 ---
