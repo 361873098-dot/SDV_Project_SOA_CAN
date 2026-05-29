@@ -11,7 +11,7 @@
 *
 *  File name:           $Source: stm_nvm.h $
 *  Revision:            $Revision: 1.0 $
-*  Author:              $Author: Li Song (uic59152)  $
+*  Author:              $Author: weizhichun (uix08649)  $
 *  Module acronym:      STM
 *  Specification:
 *  Date:                $Date: 2026/05/25  $
