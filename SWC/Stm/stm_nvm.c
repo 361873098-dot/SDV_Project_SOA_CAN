@@ -55,35 +55,6 @@ static boolean g_nvmReady = FALSE;
 ***********************************************************************************************************************/
 
 /**
- * @brief Precise hardware-calibrated delay function (millisecond level)
- * 
- * Uses NXP OsIf library with OSIF_COUNTER_DUMMY.
- * Safe to call both before and after the FreeRTOS scheduler starts.
- */
-static void StmNvm_DelayMs(uint32 ms)
-{
-    volatile uint32 count;
-    uint32 i;
-
-    for (i = 0U; i < ms; i++)
-    {
-        /* Calibrated loop for Cortex-M7 running at 400MHz.
-         * A volatile loop takes approx 3-4 CPU clock cycles per iteration.
-         * 1ms = 400,000 clock cycles.
-         * 400,000 / 3 = 133,333 iterations per millisecond.
-         * We use 1,500,000 iterations per millisecond to ensure that we wait AT LEAST 1ms
-         * under all compiler, caching, pipeline and dual-issue execution conditions,
-         * giving a safe margin for EEPROM t_WR. */
-        for (count = 0U; count < 1500000U; count++)
-        {
-            __asm volatile("nop");
-        }
-    }
-}
-
-
-
-/**
  * @brief Find block index by dataId
  *
  * Linear search through the config table to map a dataId to its
