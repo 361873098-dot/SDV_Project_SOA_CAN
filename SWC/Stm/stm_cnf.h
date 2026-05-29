@@ -114,7 +114,7 @@ typedef struct {
 #define STM_SYNC_MAX_PER_CYCLE        (2U)
 
 /***********************************************************************************************************************
- *  Retry Configuration
+ *  Retry Configuration (Method 0x04 sync to A)
  ***********************************************************************************************************************/
 
 /** Maximum retry count for 0x04 method */
@@ -122,6 +122,18 @@ typedef struct {
 
 /** Retry interval table length */
 #define STM_RETRY_INTERVAL_COUNT      (4U)
+
+/***********************************************************************************************************************
+ *  Read Request Timeout Configuration (Method 0x03/0x05)
+ ***********************************************************************************************************************/
+
+/** Maximum retry count for read request (0x03/0x05) timeout.
+ *  Uses the same stepped-interval backoff as Method 0x04: 100→200→400→800ms.
+ *  After 4 retries exhausted (total ~1.5s), the pending read is released. */
+#define STM_READ_RETRY_MAX_COUNT      (4U)
+
+/** Read retry interval table length */
+#define STM_READ_RETRY_INTERVAL_COUNT (4U)
 
 /***********************************************************************************************************************
  *  State Machine Enum
@@ -159,6 +171,9 @@ extern const Stm_DataItemCfg_t g_StmDataItemCfg[STM_MAX_DATA_ITEMS];
 
 /** Retry interval table in 10ms ticks (defined in stm_cnf.c) */
 extern const uint16 g_StmRetryIntervals[STM_RETRY_INTERVAL_COUNT];
+
+/** Read retry interval table in 10ms ticks (defined in stm_cnf.c) */
+extern const uint16 g_StmReadRetryIntervals[STM_READ_RETRY_INTERVAL_COUNT];
 
 /***********************************************************************************************************************
  *  TRACE32 Debug Test Variables & Interface

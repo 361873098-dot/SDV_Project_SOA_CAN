@@ -32,11 +32,11 @@
 *  EEPROM storage layout: 1B valid + 1B len + data[maxDataLen]
 *  Constraint: SUM(2 + maxDataLen) <= STM_EEPROM_DATA_SIZE (64)
 *
-*  Current total: (2+8) + (2+16) + (2+4) + (2+12) + (2+8) = 58 <= 64
+*  Current total: (2+18) + (2+4) + (2+4) + (2+12) + (2+8) = 56 <= 64
 ***********************************************************************************************************************/
 const Stm_DataItemCfg_t g_StmDataItemCfg[STM_MAX_DATA_ITEMS] = {
-    { 0x1100U,  18U  },  /* Item 1: e.g. calibration data */
-    { 0x0002U, 4U  },  /* Item 2: e.g. config block */
+    { 0x1100U, 18U  },  /* Item 1: e.g. calibration data */
+    { 0x0002U,  4U  },  /* Item 2: e.g. config block */
     { 0x0003U,  4U  },  /* Item 3: e.g. status flags */
     { 0x0004U, 12U  },  /* Item 4: e.g. sensor offsets */
     { 0x0005U,  8U  },  /* Item 5: e.g. runtime params */
@@ -48,6 +48,19 @@ const Stm_DataItemCfg_t g_StmDataItemCfg[STM_MAX_DATA_ITEMS] = {
 *  Stepped intervals: 100ms, 200ms, 400ms, 800ms (in 10ms ticks)
 ***********************************************************************************************************************/
 const uint16 g_StmRetryIntervals[STM_RETRY_INTERVAL_COUNT] = {
+    10U,   /* 100ms = 10 ticks */
+    20U,   /* 200ms = 20 ticks */
+    40U,   /* 400ms = 40 ticks */
+    80U    /* 800ms = 80 ticks */
+};
+
+/***********************************************************************************************************************
+*  Read Retry Interval Table for 0x03/0x05 (M read from A)
+*
+*  Stepped intervals: 100ms, 200ms, 400ms, 800ms (in 10ms ticks)
+*  Same backoff strategy as Method 0x04, 4 retries total (~1.5s).
+***********************************************************************************************************************/
+const uint16 g_StmReadRetryIntervals[STM_READ_RETRY_INTERVAL_COUNT] = {
     10U,   /* 100ms = 10 ticks */
     20U,   /* 200ms = 20 ticks */
     40U,   /* 400ms = 40 ticks */

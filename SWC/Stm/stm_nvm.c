@@ -81,7 +81,7 @@ static void StmNvm_DelayMs(uint32 ms)
     }
 }
 
-extern uint16 NVM_test_read_len;
+
 
 /**
  * @brief Find block index by dataId
@@ -228,11 +228,9 @@ static Std_ReturnType StmNvm_WriteBlockToEeprom(uint16 index)
     headerBuf[0] = g_nvmBlocks[index].valid;
     headerBuf[1] = (uint8)g_nvmBlocks[index].dataLen;
 
-    NVM_test_read_len = 0U;
     ret = Eeprom_WriteBytes(eepromAddr, headerBuf, 2U);
     if (ret != E_OK)
     {
-        NVM_test_read_len = 300U + index;
         return E_NOT_OK;
     }
 
@@ -243,12 +241,10 @@ static Std_ReturnType StmNvm_WriteBlockToEeprom(uint16 index)
         ret = Eeprom_WriteBytes(eepromAddr, g_nvmBlocks[index].data, g_nvmBlocks[index].dataLen);
         if (ret != E_OK)
         {
-            NVM_test_read_len = 400U + index;
             return E_NOT_OK;
         }
     }
 
-    NVM_test_read_len = 0x55AAU;
     return E_OK;
 }
 
@@ -547,26 +543,30 @@ Std_ReturnType StmNvm_GetSyncableItem(uint16 startIndex, uint16 *outDataId,
                                         const uint8 **outData, uint16 *outLen)
 {
     uint16 i;
+    uint16 idx;
 
     if ((outDataId == NULL) || (outData == NULL) || (outLen == NULL))
     {
         return E_NOT_OK;
     }
 
-    /* Search from startIndex to end of table (round-robin) */
-    for (i = startIndex; i < STM_MAX_DATA_ITEMS; i++)
+    /* Circular scan: search all items starting from startIndex, wrapping around.
+     * This ensures any dirty block is found in a single call regardless of
+     * startIndex position, avoiding the 1-2 cycle delay of the old linear scan. */
+    for (i = 0U; i < STM_MAX_DATA_ITEMS; i++)
     {
+        idx = (startIndex + i) % STM_MAX_DATA_ITEMS;
         /* Only sync blocks that are both valid and dirty */
-        if ((g_nvmBlocks[i].valid == TRUE) && (g_nvmBlocks[i].dirty == TRUE))
+        if ((g_nvmBlocks[idx].valid == TRUE) && (g_nvmBlocks[idx].dirty == TRUE))
         {
-            *outDataId = g_StmDataItemCfg[i].dataId;
-            *outData = g_nvmBlocks[i].data;   /* Direct pointer to RAM mirror */
-            *outLen = g_nvmBlocks[i].dataLen;
+            *outDataId = g_StmDataItemCfg[idx].dataId;
+            *outData = g_nvmBlocks[idx].data;   /* Direct pointer to RAM mirror */
+            *outLen = g_nvmBlocks[idx].dataLen;
             return E_OK;
         }
     }
 
-    /* No dirty blocks found from startIndex onwards */
+    /* No dirty blocks found in entire table */
     return E_NOT_OK;
 }
 
@@ -598,24 +598,25 @@ Std_ReturnType StmNvm_FormatEeprom(void)
 {
     Std_ReturnType ret;
     uint16 i;
-    uint8 zeroBuf[16U];
     uint8 eepromAddr;
     uint16 dataOffset;
     uint16 totalBytes;
-    uint16 bytesRemaining;
-    uint16 writeOffset;
 
-    NVM_test_read_len = 0U;
+    /* Zero buffer for clearing EEPROM blocks.
+     * Static to avoid stack overflow (max block = 2 + STM_NVM_BLOCK_MAX_SIZE). */
+    static uint8 zeroBuf[STM_NVM_BLOCK_MAX_SIZE + 2U];
+
     /* Step 1: Write magic byte to mark EEPROM as formatted */
     uint8 magicVal = STM_EEPROM_MAGIC_VALUE;
     ret = Eeprom_WriteBytes(STM_EEPROM_MAGIC_ADDR, &magicVal, 1U);
     if (ret != E_OK)
     {
-        NVM_test_read_len = 100U;
         return E_NOT_OK;
     }
 
-    /* Step 2: Clear all data blocks in EEPROM (write zeros) */
+    /* Step 2: Clear all data blocks in EEPROM (write zeros).
+     * Eeprom_WriteBytes() handles page boundary splitting internally,
+     * so no manual segmented loop is needed. */
     (void)memset(zeroBuf, 0, sizeof(zeroBuf));
 
     for (i = 0U; i < STM_MAX_DATA_ITEMS; i++)
@@ -623,24 +624,12 @@ Std_ReturnType StmNvm_FormatEeprom(void)
         dataOffset = g_nvmBlocks[i].eepromOffset;
         /* Total EEPROM bytes for this block: 2 (header) + maxDataLen */
         totalBytes = 2U + g_StmDataItemCfg[i].maxDataLen;
-        bytesRemaining = totalBytes;
-        writeOffset = 0U;
+        eepromAddr = (uint8)(STM_EEPROM_DATA_START_ADDR + dataOffset);
 
-        /* Write in segments of EEPROM_WRITE_MAX_LEN (16 bytes) */
-        while (bytesRemaining > 0U)
+        ret = Eeprom_WriteBytes(eepromAddr, zeroBuf, totalBytes);
+        if (ret != E_OK)
         {
-            uint16 chunkLen = (bytesRemaining > EEPROM_WRITE_MAX_LEN) ? EEPROM_WRITE_MAX_LEN : bytesRemaining;
-            eepromAddr = (uint8)(STM_EEPROM_DATA_START_ADDR + dataOffset + writeOffset);
-
-            ret = Eeprom_WriteBytes(eepromAddr, zeroBuf, (uint16)chunkLen);
-            if (ret != E_OK)
-            {
-                NVM_test_read_len = 200U + i;
-                return E_NOT_OK;
-            }
-
-            writeOffset += chunkLen;
-            bytesRemaining -= chunkLen;
+            return E_NOT_OK;
         }
 
         /* Step 3: Clear corresponding RAM mirror block */
@@ -649,8 +638,6 @@ Std_ReturnType StmNvm_FormatEeprom(void)
         g_nvmBlocks[i].valid = FALSE;
         g_nvmBlocks[i].dirty = FALSE;
     }
-
-    NVM_test_read_len = 0xAA55U;
 
     return E_OK;
 }
