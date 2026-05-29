@@ -453,7 +453,7 @@ static void Stm_ProcessSyncToA(void) {
          * counts as a failed attempt: bump retryCount and apply the stepped
          * backoff. Once retryCount reaches the max, the entry check above
          * judges it FAILED and clears dirty (no 10ms storm). */
-        Stm_RetryState.retryCount++;
+        //Stm_RetryState.retryCount++;
         Stm_RetryState.tickCounter = 0U;
       }
       return;
@@ -507,7 +507,7 @@ static void Stm_ProcessSyncToA(void) {
       /* Request sent successfully - set up retry state to track this sync */
       Stm_RetryState.dataId = syncDataId;
       Stm_RetryState.sessionId = sessionId;
-      Stm_RetryState.retryCount = 0U;
+      Stm_RetryState.retryCount = 1U;
       Stm_RetryState.tickCounter = 0U;
       Stm_RetryState.active = 1U;
 
