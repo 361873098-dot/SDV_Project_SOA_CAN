@@ -33,8 +33,72 @@
 #include "CDD_I2c_CfgDefines.h"
 #include "eeprom.h"
 
+#define EEPROM_CPU_CYCLES_PER_US       (400U)
+#define EEPROM_WRITE_CYCLE_DELAY_MS    (10U)
+#define EEPROM_DWT_CYCCNT_ADDR         (0xE0001004UL)
+#define EEPROM_DWT_CTRL_ADDR           (0xE0001000UL)
+#define EEPROM_DEMCR_ADDR              (0xE000EDFCUL)
+#define EEPROM_DWT_CTRL_CYCCNTENA_MASK (0x00000001UL)
+#define EEPROM_DEMCR_TRCENA_MASK       (0x01000000UL)
+#define EEPROM_DWT_STARTUP_GUARD       (1000U)
+
 uint8 TstRdEepromData[EEPROM_8BYTE_LEN] = {0};
 uint8 TstWrEepromData[EEPROM_8BYTE_LEN] = {0xA5U, 0x5AU, 0x11U, 0x22U, 0x33U, 0x44U, 0x55U, 0x66U};
+
+/***********************************************************************************************************************
+ *  Function name    : Eeprom_DelayMs()
+ *
+ *  Description      : Busy-wait delay using the ARM Cortex-M7 DWT cycle counter.
+ *                     The DWT counter is enabled during ECU diagnostic init.
+ *
+ *  List of arguments: ms - Delay time in milliseconds.
+ *                          Used for EEPROM internal write-cycle wait (t_WR).
+ *
+ *  Return value     : E_OK     - Delay completed
+ *                     E_NOT_OK - DWT cycle counter is not enabled or not running
+ *
+ ***********************************************************************************************************************/
+static Std_ReturnType Eeprom_DelayMs(uint32 ms)
+{
+    volatile uint32 *const DWT_CYCCNT = (volatile uint32 *)EEPROM_DWT_CYCCNT_ADDR;
+    volatile uint32 *const DWT_CTRL = (volatile uint32 *)EEPROM_DWT_CTRL_ADDR;
+    volatile uint32 *const DEMCR = (volatile uint32 *)EEPROM_DEMCR_ADDR;
+    uint32 start;
+    uint32 target;
+    uint32 guard;
+
+    if (((*DEMCR & EEPROM_DEMCR_TRCENA_MASK) == 0U) ||
+        ((*DWT_CTRL & EEPROM_DWT_CTRL_CYCCNTENA_MASK) == 0U))
+    {
+        return E_NOT_OK;
+    }
+
+    start = *DWT_CYCCNT;
+
+    /* Verify CYCCNT is actually incrementing before entering the delay loop. */
+    for (guard = 0U; guard < EEPROM_DWT_STARTUP_GUARD; guard++)
+    {
+        if (*DWT_CYCCNT != start)
+        {
+            break;
+        }
+    }
+    if (guard >= EEPROM_DWT_STARTUP_GUARD)
+    {
+        return E_NOT_OK;
+    }
+
+    start = *DWT_CYCCNT;
+    target = ms * 1000U * EEPROM_CPU_CYCLES_PER_US;
+    /* Unsigned subtraction handles 32-bit counter wrap-around. */
+    while ((*DWT_CYCCNT - start) < target)
+    {
+        /* busy wait */
+    }
+
+    return E_OK;
+}
+
 /***********************************************************************************************************************
  *  Function name    : Eeprom_ReadBytes()
  *
@@ -187,17 +251,10 @@ Std_ReturnType Eeprom_WriteBytes(uint8 address, uint8 *data, uint16 length)
          * This ensures the EEPROM has completed its physical write
          * before this function returns, so callers do NOT need to add
          * their own t_WR delay. */
+        ret = Eeprom_DelayMs(EEPROM_WRITE_CYCLE_DELAY_MS);
+        if (ret != E_OK)
         {
-            volatile uint32 count;
-            uint32 i;
-            /* 10ms delay at 400MHz: same calibration as StmNvm_DelayMs */
-            for (i = 0U; i < 10U; i++)
-            {
-                for (count = 0U; count < 1500000U; count++)
-                {
-                    __asm volatile("nop");
-                }
-            }
+            return E_NOT_OK;
         }
     }
 
