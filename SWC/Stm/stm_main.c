@@ -186,6 +186,99 @@ static void Stm_BuildSyncPayload(uint16 dataId, const uint8 *data,
   }
 }
 
+/**
+ * @brief Evaluate the business status of a Method 0x04 sync response payload
+ *
+ * The protocol-layer ReturnCode (IPC header) is the primary success signal and
+ * is checked by the caller. This helper inspects the business-status portion of
+ * the payload and is tolerant of both encodings seen in the field:
+ *
+ *   - len >= 4 : [dataId_H][dataId_L][status_H][status_L]  (echoes dataId)
+ *   - len == 2..3 : [status_H][status_L]                    (status only, per
+ *                   storage protocol §2.1 "响应 payload: 2字节状态")
+ *   - len < 2 : no business status carried -> trust the protocol ReturnCode
+ *
+ * @param buf            Response payload buffer
+ * @param len            Response payload length
+ * @param expectedDataId DataId of the in-flight 0x04 request (used only when the
+ *                       response echoes a dataId, to avoid clearing the wrong
+ *                       block)
+ * @return TRUE if the business status indicates success (0x0000), FALSE otherwise
+ */
+static boolean Stm_SyncResponseStatusOk(const uint8 *buf, uint16 len,
+                                        uint16 expectedDataId) {
+  if (len >= 4U) {
+    uint16 rspDataId = ((uint16)buf[0] << 8U) | (uint16)buf[1];
+    if (rspDataId != expectedDataId) {
+      /* A-core echoed a different dataId - not our response */
+      return FALSE;
+    }
+    return ((buf[2] == 0x00U) && (buf[3] == 0x00U)) ? TRUE : FALSE;
+  }
+
+  if (len >= 2U) {
+    return ((buf[0] == 0x00U) && (buf[1] == 0x00U)) ? TRUE : FALSE;
+  }
+
+  /* No business status in payload: rely solely on the protocol ReturnCode,
+   * which the caller has already verified to be PICC_RET_OK. */
+  return TRUE;
+}
+
+/**
+ * @brief Poll and handle a Method 0x01 consistency-check request from A-core
+ *
+ * Per storage protocol §2.2.1 the A-core daemon issues the consistency check
+ * "at startup and periodically". A successful check is the recovery mechanism
+ * for data whose 0x04 sync previously failed: on success we re-mark every valid
+ * NVM block dirty so it is (re)synced to A-core via Method 0x04.
+ *
+ * Request  : 2B dataId == 0x0000 (global consistency probe)
+ * Response : 4B [0x0000 dataId][0x0000 status], ReturnCode = PICC_RET_OK
+ *
+ * This single handler is shared by WAIT_CONSISTENCY (initial handshake) and the
+ * RUNNING state (periodic re-check), guaranteeing identical behavior.
+ *
+ * @return TRUE  if a valid consistency check was received and accepted
+ *         FALSE if no request was pending, or the request was malformed
+ */
+static boolean Stm_HandleConsistencyCheck(void) {
+  static uint8 s_consReqBuf[4U]; /* static to avoid stack overflow */
+  uint16 consReqLen;
+  uint8 consSessionId;
+
+  if (PICC_GetMethodData(PICC_APP_STORAGE, STM_METHOD_CONSISTENCY_CHECK,
+                         s_consReqBuf, sizeof(s_consReqBuf), &consReqLen,
+                         &consSessionId, NULL, NULL) != PICC_E_OK) {
+    return FALSE; /* No consistency check request pending */
+  }
+
+  /* Validate: payload must be >= 2 bytes and dataId must be 0x0000 */
+  if ((consReqLen >= 2U) && (s_consReqBuf[0] == 0x00U) &&
+      (s_consReqBuf[1] == 0x00U)) {
+    static uint8 s_consRespBuf[4U];
+    s_consRespBuf[0] = 0x00U; /* dataId high byte */
+    s_consRespBuf[1] = 0x00U; /* dataId low byte */
+    s_consRespBuf[2] = 0x00U; /* status high byte */
+    s_consRespBuf[3] = 0x00U; /* status low byte: OK */
+    (void)PICC_MethodResponse(PICC_APP_STORAGE, STM_METHOD_CONSISTENCY_CHECK,
+                              consSessionId, (uint8)PICC_RET_OK, s_consRespBuf,
+                              4U);
+
+    /* Re-mark all valid NVM blocks dirty to (re)trigger a full Method 0x04
+     * sync. This is the protocol-defined recovery path for blocks whose
+     * previous sync was judged failed. */
+    StmNvm_SetAllValidDirty();
+    return TRUE;
+  }
+
+  /* Invalid consistency check request (dataId != 0x0000 or len < 2).
+   * Reply with error so A-core knows M-core rejected it. */
+  (void)PICC_MethodResponse(PICC_APP_STORAGE, STM_METHOD_CONSISTENCY_CHECK,
+                            consSessionId, (uint8)PICC_RET_NOT_OK, NULL, 0U);
+  return FALSE;
+}
+
 /***********************************************************************************************************************
  *  Sub-task: Check link state
  *
@@ -216,10 +309,11 @@ static void Stm_CheckLinkState(void) {
  *
  *  Polls PICC for incoming Method requests on the Provider (Server) endpoint.
  *
- *  Method 0x01 (Consistency Check) is NOT handled here.
- *  It is processed exclusively in the WAIT_CONSISTENCY state to avoid
- *  misinterpreting dataId=0x0000 (global consistency probe) as a business
- *  data block lookup, which would always return NOT_OK.
+ *  Method 0x01 (Consistency Check):
+ *    Handled here via the shared Stm_HandleConsistencyCheck() helper so that
+ *    the periodic re-check described in protocol §2.2.1 is honored while in
+ *    SYNC_TO_A/RUNNING. A successful check re-marks all valid blocks dirty,
+ *    which is the recovery path for any 0x04 sync that was judged failed.
  *
  *  Method 0x02 (A-core Write):
  *    A-core -> M-core: 2B dataId (big-endian) + data
@@ -233,22 +327,13 @@ static void Stm_ProcessRxFromA(void) {
   uint16 methodLen;
   uint8 sessionId;
 
-  /* --- Method 0x01: Reject consistency check outside WAIT_CONSISTENCY ---
-   * Method 0x01 is only valid during the WAIT_CONSISTENCY state (handled
-   * there). If received in RUNNING/SYNC_TO_A, reply with error so A-core knows
-   * the request was rejected (consistency check already completed). */
-  if (PICC_GetMethodData(PICC_APP_STORAGE, STM_METHOD_CONSISTENCY_CHECK,
-                         s_methodBuf, sizeof(s_methodBuf), &methodLen,
-                         &sessionId, NULL, NULL) == PICC_E_OK) {
-    (void)PICC_MethodResponse(PICC_APP_STORAGE, STM_METHOD_CONSISTENCY_CHECK,
-                              sessionId, 0x01U, NULL, 0U);
-  }
+  /* --- Method 0x01: Periodic consistency check from A-core ---
+   * A-core re-issues this periodically (protocol §2.2.1). Accepting it here
+   * re-marks all valid blocks dirty, which is the recovery mechanism for any
+   * block whose Method 0x04 sync was previously judged failed. */
+  (void)Stm_HandleConsistencyCheck();
 
-  /* --- Method 0x02: A-core write to M-core ---
-   * Note: Method 0x01 (Consistency Check) is handled exclusively in the
-   * WAIT_CONSISTENCY state. It is NOT processed here to avoid misinterpreting
-   * dataId=0x0000 (global consistency probe) as a lookup for a business
-   * data block with ID 0, which would always return NOT_OK. */
+  /* --- Method 0x02: A-core write to M-core --- */
   if (PICC_GetMethodData(PICC_APP_STORAGE, STM_METHOD_A_WRITE, s_methodBuf,
                          sizeof(s_methodBuf), &methodLen, &sessionId, NULL,
                          NULL) == PICC_E_OK) {
@@ -265,7 +350,7 @@ static void Stm_ProcessRxFromA(void) {
         s_respBuf[2] = 0x00U; /* status high byte */
         s_respBuf[3] = 0x00U; /* status low byte: OK */
         (void)PICC_MethodResponse(PICC_APP_STORAGE, STM_METHOD_A_WRITE,
-                                  sessionId, 0x00U, s_respBuf, 4U);
+                                  sessionId, (uint8)PICC_RET_OK, s_respBuf, 4U);
       } else {
         /* Write failed (invalid dataId, length mismatch, or EEPROM error) */
         s_respBuf[0] = s_methodBuf[0];
@@ -273,12 +358,13 @@ static void Stm_ProcessRxFromA(void) {
         s_respBuf[2] = 0x00U;
         s_respBuf[3] = 0x01U; /* status: NOT OK */
         (void)PICC_MethodResponse(PICC_APP_STORAGE, STM_METHOD_A_WRITE,
-                                  sessionId, 0x01U, s_respBuf, 4U);
+                                  sessionId, (uint8)PICC_RET_NOT_OK, s_respBuf,
+                                  4U);
       }
     } else {
       /* Invalid payload length (< 2 bytes, missing dataId) */
       (void)PICC_MethodResponse(PICC_APP_STORAGE, STM_METHOD_A_WRITE, sessionId,
-                                0x01U, NULL, 0U);
+                                (uint8)PICC_RET_NOT_OK, NULL, 0U);
     }
   }
 }
@@ -290,23 +376,29 @@ static void Stm_ProcessRxFromA(void) {
  *  Only one sync can be in-flight at a time. Retry logic with stepped intervals
  *  handles temporary communication failures.
  *
- *  Response handling strategy (data integrity first):
+ *  Response handling strategy (protocol §2.2.2):
  *  ┌──────────────────────────────────────────────────────────────────┐
  *  │  A-core response          │  Action                            │
  *  ├───────────────────────────┼────────────────────────────────────┤
- *  │  ReturnCode=0x00 (OK)     │  Payload OK: clear dirty, release │
- *  │  + payload valid          │  slot                              │
- *  │  ReturnCode=0x00 (OK)     │  Payload invalid (wrong dataId,   │
- *  │  + payload invalid        │  bad status, short len):           │
- *  │                           │  keep dirty, retryCount++,         │
- *  │                           │  stepped retry (100->200->400->800)│
- *  │  ReturnCode≠0x00 (NOT_OK) │  keep dirty, retryCount++,         │
- *  │                           │  stepped retry (100->200->400->800)│
- *  │  No response (timeout)    │  keep dirty, retryCount++,         │
- *  │                           │  stepped retry (100->200->400->800)│
- *  │  Max retries exhausted    │  keep dirty, release slot,         │
- *  │                           │  next round-robin scan will retry  │
+ *  │  ReturnCode=OK            │  clear dirty, release slot         │
+ *  │  + payload status OK      │  (sync succeeded)                  │
+ *  │  ReturnCode=OK            │  retryCount++, stepped backoff     │
+ *  │  + payload status NOT_OK  │  (100->200->400->800ms)            │
+ *  │  ReturnCode≠OK            │  retryCount++, stepped backoff     │
+ *  │  (NOT_OK / NOT_READY)     │                                    │
+ *  │  No response (timeout)    │  retryCount++, stepped backoff     │
+ *  │  Max retries exhausted    │  judged FAILED: clear dirty +      │
+ *  │                           │  release slot. NOT re-picked here. │
+ *  │                           │  A-core's periodic consistency     │
+ *  │                           │  check (0x01) re-marks dirty and   │
+ *  │                           │  triggers a fresh sync attempt.    │
  *  └──────────────────────────────────────────────────────────────────┘
+ *
+ *  IMPORTANT - storm prevention: on exhaustion the dirty flag is CLEARED so the
+ *  round-robin scan does NOT immediately re-pick the same block and re-issue
+ *  PICC_MethodRequest every 10ms. Recovery is gated by A-core's periodic
+ *  consistency check, bounding the resync rate even when A-core persistently
+ *  rejects the data. The local RAM/EEPROM copy is always preserved.
  *
  *  Anti-storm: Max STM_SYNC_MAX_PER_CYCLE (2) sync messages per 10ms cycle.
  ***********************************************************************************************************************/
@@ -323,13 +415,18 @@ static void Stm_ProcessSyncToA(void) {
   /* --- Handle ongoing retry if a sync is already in-flight --- */
   if (Stm_RetryState.active != 0U) {
     if (Stm_RetryState.retryCount >= STM_RETRY_MAX_COUNT) {
-      /* Max retries exhausted - release slot so other items can proceed.
-       * IMPORTANT: Do NOT clear dirty flag! The data has NOT been
-       * successfully synced to A-core. Clearing dirty would cause
-       * silent data loss. The item will be picked up again by the next
-       * round-robin scan via StmNvm_GetSyncableItem(). This provides
-       * "degraded background retry" - the system moves forward but
-       * continues attempting to sync this item. */
+      /* Max retries exhausted -> judged FAILED (protocol §2.2.2).
+       *
+       * CRITICAL (storm fix): clear the dirty flag and release the slot.
+       * Keeping dirty TRUE here would let the round-robin scan re-pick this
+       * same block on the very next 10ms cycle and re-issue PICC_MethodRequest
+       * indefinitely whenever A-core keeps returning bad/NOT_OK responses.
+       *
+       * The local RAM/EEPROM copy is preserved. Resync is deferred to A-core's
+       * periodic consistency check (Method 0x01), which calls
+       * StmNvm_SetAllValidDirty() to re-arm the sync. This bounds the resync
+       * rate to A-core's consistency-check period instead of every 10ms. */
+      StmNvm_ClearDirty(Stm_RetryState.dataId);
       Stm_RetryState.active = 0U;
       return;
     }
@@ -340,51 +437,22 @@ static void Stm_ProcessSyncToA(void) {
                              Stm_RetryState.sessionId, &syncReturnCode,
                              s_syncBuf, sizeof(s_syncBuf), &syncLen, NULL,
                              NULL) == PICC_E_OK) {
-      if (syncReturnCode == (uint8)PICC_RET_OK) {
-        /* Method 0x04 response payload format: 2B dataId (big-endian) + 2B
-         * status Minimum valid payload: 4 bytes (2B dataId + 2B status).
-         * Extract dataId and verify it matches our pending request. */
-        uint16 rspDataId =
-            (syncLen >= 2U)
-                ? (((uint16)s_syncBuf[0] << 8U) | (uint16)s_syncBuf[1])
-                : 0xFFFFU;
-
-        /* Only clear dirty flag if:
-         * 1. Payload length is at least 4 bytes
-         * 2. Returned dataId matches the one we sent
-         * 3. Business status in payload is 0x0000 (Success) */
-        if ((syncLen >= 4U) && (rspDataId == Stm_RetryState.dataId) &&
-            (s_syncBuf[2] == 0x00U) && (s_syncBuf[3] == 0x00U)) {
-          /* A-core protocol and business layers both accepted the request -
-           * sync successful. */
-          StmNvm_ClearDirty(Stm_RetryState.dataId);
-          Stm_RetryState.active = 0U;
-        } else {
-          /* A-core business layer rejected (status != 0x0000) or payload
-           * format is invalid (len < 4, dataId mismatch). Per protocol 2.2.2:
-           * count as a retry attempt and apply stepped-interval backoff
-           * (100->200->400->800ms). This prevents an infinite loop where
-           * the dirty block is immediately re-picked and re-sent every 10ms.
-           *
-           * After max retries exhausted, the dirty flag is kept TRUE and the
-           * slot is released, allowing round-robin scan to retry later
-           * (degraded background retry). */
-          Stm_RetryState.retryCount++;
-          Stm_RetryState.tickCounter = 0U;
-          /* If max retries exhausted, the check at function entry (line 318)
-           * will release the slot on the next call. */
-        }
+      /* Success requires BOTH the protocol-layer ReturnCode (primary signal)
+       * and the business status in the payload to indicate OK. The payload
+       * parsing is tolerant of the 2B status-only and 4B dataId+status
+       * encodings (see Stm_SyncResponseStatusOk). */
+      if ((syncReturnCode == (uint8)PICC_RET_OK) &&
+          (Stm_SyncResponseStatusOk(s_syncBuf, syncLen,
+                                    Stm_RetryState.dataId) == TRUE)) {
+        /* A-core accepted the data at both protocol and business layers. */
+        StmNvm_ClearDirty(Stm_RetryState.dataId);
+        Stm_RetryState.active = 0U;
       } else {
-        /* A-core protocol layer rejected (ReturnCode != 0x00).
-         * This means A-core received the message but refused it at
-         * protocol level (e.g. internal error, not ready).
-         *
-         * Per protocol 2.2.2: count as a retry attempt with the same
-         * stepped-interval backoff logic. Prevents infinite loop where
-         * the slot is released and the block is re-picked immediately.
-         *
-         * After max retries exhausted, dirty remains TRUE and the slot
-         * is released for round-robin degraded retry. */
+        /* A-core rejected (ReturnCode != OK, e.g. NOT_OK/NOT_READY) or the
+         * business status / payload was invalid. Per protocol §2.2.2 this
+         * counts as a failed attempt: bump retryCount and apply the stepped
+         * backoff. Once retryCount reaches the max, the entry check above
+         * judges it FAILED and clears dirty (no 10ms storm). */
         Stm_RetryState.retryCount++;
         Stm_RetryState.tickCounter = 0U;
       }
@@ -642,44 +710,11 @@ void Stm_Main(void) {
       break; /* Link lost, already transitioned to WAIT_LINK */
     }
 
-    /* Poll for Method 0x01 (Consistency Check) from A-core.
-     * Protocol: A-core sends 2B dataId (must be 0x0000 for global
-     * consistency check). M-core replies with 4-byte success
-     * payload [0x00,0x00]+[0x00,0x00] (dataId + status=OK). */
-    {
-      static uint8 s_consReqBuf[4U]; /* static to avoid stack overflow */
-      uint16 consReqLen;
-      uint8 consSessionId;
-
-      if (PICC_GetMethodData(PICC_APP_STORAGE, STM_METHOD_CONSISTENCY_CHECK,
-                             s_consReqBuf, sizeof(s_consReqBuf), &consReqLen,
-                             &consSessionId, NULL, NULL) == PICC_E_OK) {
-        /* Validate: payload must be >= 2 bytes and dataId must be 0x0000 */
-        if ((consReqLen >= 2U) && (s_consReqBuf[0] == 0x00U) &&
-            (s_consReqBuf[1] == 0x00U)) {
-          /* Consistency check passed - reply with 4-byte success */
-          static uint8 s_consRespBuf[4U];
-          s_consRespBuf[0] = 0x00U; /* dataId high byte */
-          s_consRespBuf[1] = 0x00U; /* dataId low byte */
-          s_consRespBuf[2] = 0x00U; /* status high byte */
-          s_consRespBuf[3] = 0x00U; /* status low byte: OK */
-          (void)PICC_MethodResponse(PICC_APP_STORAGE,
-                                    STM_METHOD_CONSISTENCY_CHECK, consSessionId,
-                                    0x00U, s_consRespBuf, 4U);
-
-          /* Mark all valid NVM blocks as dirty to trigger full sync */
-          StmNvm_SetAllValidDirty();
-
-          /* Transition to SYNC_TO_A to begin data synchronization */
-          Stm_State = STM_STATE_SYNC_TO_A;
-        } else {
-          /* Invalid consistency check request (dataId != 0x0000 or len < 2).
-           * Reply with error so A-core knows M-core rejected it. */
-          (void)PICC_MethodResponse(PICC_APP_STORAGE,
-                                    STM_METHOD_CONSISTENCY_CHECK, consSessionId,
-                                    0x01U, NULL, 0U);
-        }
-      }
+    /* Poll for Method 0x01 (Consistency Check) from A-core via the shared
+     * handler. On success it replies OK and re-marks all valid blocks dirty;
+     * we then advance to SYNC_TO_A to push the data via Method 0x04. */
+    if (Stm_HandleConsistencyCheck() == TRUE) {
+      Stm_State = STM_STATE_SYNC_TO_A;
     }
     break;
 
@@ -717,9 +752,9 @@ void Stm_Main(void) {
 
   case STM_STATE_RUNNING:
     /* Normal operation: all sub-tasks are active */
-    Stm_ProcessRxFromA();    /* Handle A-core Method requests */
-    Stm_ProcessSyncToA();    /* Sync any new dirty data */
-    Stm_ProcessAppReadReq(); /* TODO: Handle pending read responses */
+    Stm_ProcessRxFromA();    /* Handle A-core Method 0x01/0x02 requests */
+    Stm_ProcessSyncToA();    /* Sync any new dirty data (Method 0x04) */
+    Stm_ProcessAppReadReq(); /* Handle pending Method 0x03/0x05 responses */
 
     /* Check link state - transition to WAIT_LINK if either link is lost */
     Stm_CheckLinkState();
@@ -755,24 +790,19 @@ Std_ReturnType Stm_ReadLocal(uint16 dataId, uint8 *data, uint16 maxLen,
 /**
  * Asynchronously request A-core to send data for the specified dataId.
  *
- * Uses Method 0x03 /0x5 (M async read from A) with PICC_METHOD_WITH_RESPONSE.
- * The response is handled asynchronously in Stm_ProcessAppReadReq().
+ * Supports both Method 0x03 (M read from A) and Method 0x05 (M async read from
+ * A) with PICC_METHOD_WITH_RESPONSE. The response is handled asynchronously in
+ * Stm_ProcessAppReadReq().
  *
  * Constraints:
-/**
- * Asynchronously request A-core to send data for the specified dataId.
- * Supports both Method 0x03 (M read from A) and Method 0x05 (M async read from
-A).
- * Response is handled in Stm_Main() state machine.
- *
  * - Must be in RUNNING state (link established and data synced)
  * - Only one read request can be pending at a time
  *
  * @param methodId  Method identifier (STM_METHOD_M_READ_FROM_A or
-STM_METHOD_M_ASYNC_READ)
+ *                  STM_METHOD_M_ASYNC_READ)
  * @param dataId    Data item identifier to request from A-core
  * @return E_OK if request sent, E_NOT_OK if not in RUNNING state or request
-already pending
+ *         already pending
  */
 Std_ReturnType Stm_RequestReadFromA(uint8 methodId, uint16 dataId) {
   static uint8 s_reqPayload[4U]; /* 2B dataId (big-endian) + 2B reserved */
