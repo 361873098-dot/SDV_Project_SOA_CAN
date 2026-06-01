@@ -32,10 +32,10 @@
 *  EEPROM storage layout: 1B valid + 1B len + data[maxDataLen]
 *  Constraint: SUM(2 + maxDataLen) <= STM_EEPROM_DATA_SIZE (64)
 *
-*  Current total: (2+18) + (2+4) + (2+4) + (2+12) + (2+8) = 56 <= 64
+*  Current total: (2+16) + (2+4) + (2+4) + (2+12) + (2+8) = 54 <= 64
 ***********************************************************************************************************************/
 const Stm_DataItemCfg_t g_StmDataItemCfg[STM_MAX_DATA_ITEMS] = {
-    { 0x1100U, 18U  },  /* Item 1: e.g. calibration data */
+    { 0x1100U, 16U  },  /* Item 1: e.g. calibration data */
     { 0x0002U,  4U  },  /* Item 2: e.g. config block */
     { 0x0003U,  4U  },  /* Item 3: e.g. status flags */
     { 0x0004U, 12U  },  /* Item 4: e.g. sensor offsets */
@@ -99,11 +99,11 @@ void Stm_ProcessTest(void)
     {
         case 1U:
             /* Case 1: Write calibration data to Item 1 (dataId=0x0001, maxLen=8) */
-            for (i = 0U; i < 8U; i++)
+            for (i = 0U; i < g_StmDataItemCfg[0].maxDataLen; i++)
             {
                 tempWriteBuf[i] = (uint8)(NVM_test_write_val + i);
             }
-            NVM_test_result = Stm_WriteLocal(g_StmDataItemCfg[0].dataId, tempWriteBuf, 8U);
+            NVM_test_result = Stm_WriteLocal(g_StmDataItemCfg[0].dataId, tempWriteBuf, g_StmDataItemCfg[0].maxDataLen);
             break;
 
         case 2U:
@@ -114,7 +114,7 @@ void Stm_ProcessTest(void)
 
         case 3U:
             /* Case 3: Request A-core to read Item 2 (dataId=0x0002) via Method 0x05 */
-            NVM_test_result = Stm_RequestReadFromA(STM_METHOD_M_ASYNC_READ, 0x0002U);
+            NVM_test_result = Stm_RequestReadFromA(STM_METHOD_M_ASYNC_READ, g_StmDataItemCfg[0].dataId);
             break;
 
         case 4U:
