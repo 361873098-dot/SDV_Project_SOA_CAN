@@ -55,19 +55,6 @@ const uint16 g_StmRetryIntervals[STM_RETRY_INTERVAL_COUNT] = {
 };
 
 /***********************************************************************************************************************
-*  Read Retry Interval Table for 0x03/0x05 (M read from A)
-*
-*  Stepped intervals: 100ms, 200ms, 400ms, 800ms (in 10ms ticks)
-*  Same backoff strategy as Method 0x04, 4 retries total (~1.5s).
-***********************************************************************************************************************/
-const uint16 g_StmReadRetryIntervals[STM_READ_RETRY_INTERVAL_COUNT] = {
-    10U,   /* 100ms = 10 ticks */
-    20U,   /* 200ms = 20 ticks */
-    40U,   /* 400ms = 40 ticks */
-    80U    /* 800ms = 80 ticks */
-};
-
-/***********************************************************************************************************************
 *  TRACE32 Debug Test Implementation
 ***********************************************************************************************************************/
 #include "stm_main.h"

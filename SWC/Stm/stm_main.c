@@ -95,8 +95,7 @@ typedef struct {
   uint8 methodId;     /**< Method ID used (0x03 or 0x05) */
   uint8 sessionId;    /**< Session ID returned by PICC_MethodRequest */
   uint8 active;       /**< TRUE if a read request is pending */
-  uint8 retryCount;   /**< Timeout retry count (0..STM_READ_RETRY_MAX_COUNT) */
-  uint16 tickCounter; /**< Tick counter for stepped timeout interval */
+  uint16 tickCounter; /**< Tick counter for fixed 1500ms timeout */
 } Stm_AppReadReq_t;
 
 static Stm_AppReadReq_t Stm_PendingReadReq;
@@ -555,14 +554,6 @@ static void Stm_ProcessAppReadReq(void) {
     return; /* No pending read request */
   }
 
-  /* --- Timeout check: stepped-interval backoff --- */
-  if (Stm_PendingReadReq.retryCount >= STM_READ_RETRY_MAX_COUNT) {
-    /* Max timeout retries exhausted (~1.5s) - release pending request.
-     * Application must re-issue the read request if still needed. */
-    Stm_PendingReadReq.active = 0U;
-    return;
-  }
-
   /* Poll for response from A-core matching the pending request's session ID */
   if (PICC_GetResponseData(PICC_APP_STM_CLI, Stm_PendingReadReq.methodId,
                            Stm_PendingReadReq.sessionId, &readReturnCode,
@@ -590,19 +581,11 @@ static void Stm_ProcessAppReadReq(void) {
     /* Mark request as completed - application can issue new requests */
     Stm_PendingReadReq.active = 0U;
   } else {
-    /* No response yet - advance timeout tick counter */
+    /* No response yet - advance timeout tick counter.
+     * Simple fixed timeout: 150 ticks × 10ms/tick = 1500ms. */
     Stm_PendingReadReq.tickCounter++;
-    {
-      uint8 intervalIdx =
-          (Stm_PendingReadReq.retryCount < STM_READ_RETRY_INTERVAL_COUNT)
-              ? Stm_PendingReadReq.retryCount
-              : (STM_READ_RETRY_INTERVAL_COUNT - 1U);
-      if (Stm_PendingReadReq.tickCounter >=
-          g_StmReadRetryIntervals[intervalIdx]) {
-        /* Interval elapsed - advance to next stepped delay */
-        Stm_PendingReadReq.tickCounter = 0U;
-        Stm_PendingReadReq.retryCount++;
-      }
+    if (Stm_PendingReadReq.tickCounter >= 150U) {
+      Stm_PendingReadReq.active = 0U;
     }
   }
 }
@@ -844,7 +827,6 @@ Std_ReturnType Stm_RequestReadFromA(uint8 methodId, uint16 dataId) {
   Stm_PendingReadReq.dataId = dataId;
   Stm_PendingReadReq.methodId = methodId;
   Stm_PendingReadReq.sessionId = sessionId;
-  Stm_PendingReadReq.retryCount = 0U;
   Stm_PendingReadReq.tickCounter = 0U;
   Stm_PendingReadReq.active = 1U;
 
